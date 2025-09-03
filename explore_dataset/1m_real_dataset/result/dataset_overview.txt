@@ -1,0 +1,112 @@
+dataset_overview.txt:
+# 数据集总体概述详细分析报告
+================================================================================
+
+file_information:
+indexer.pkl:
+path: /data_ams/training_data/indexer.pkl
+size_mb: 141.8915147781372
+exists: True
+item_feat_dict.json:
+path: /data_ams/training_data/item_feat_dict.json
+size_mb: 799.5854940414429
+exists: True
+item_feat_num.json:
+path: /data_ams/training_data/item_feat_num.json
+size_mb: 0.00016880035400390625
+exists: True
+seq.jsonl:
+path: /data_ams/training_data/seq.jsonl
+size_mb: 17688.075103759766
+exists: True
+seq_offsets.pkl:
+path: /data_ams/training_data/seq_offsets.pkl
+size_mb: 6.46861457824707
+exists: True
+user_feat_num.json:
+path: /data_ams/training_data/user_feat_num.json
+size_mb: 7.915496826171875e-05
+exists: True
+indexer_summary:
+
+feature_statistics:
+item_features:
+total_features: 14
+feature_counts: [14 项]
+[0] 51
+[1] 4783154
+[2] 90709
+[3] 497
+[4] 90919
+[5] 2135891
+[6] 4191
+[7] 3392
+[8] 1426
+[9] 691
+[10] 20
+[11] 30
+[12] 18
+[13] 6
+top_features: [14 项]
+[0] ('111', 4783154)
+[1] ('121', 2135891)
+[2] ('122', 90919)
+[3] ('102', 90709)
+[4] ('119', 4191)
+[5] ('120', 3392)
+[6] ('118', 1426)
+[7] ('115', 691)
+[8] ('117', 497)
+[9] ('101', 51)
+[10] ('112', 30)
+[11] ('114', 20)
+[12] ('116', 18)
+[13] ('100', 6)
+user_features:
+total_features: 8
+feature_counts: [8 项]
+[0] 14
+[1] 86
+[2] 19
+[3] 7
+[4] 2
+[5] 2
+[6] 3
+[7] 4
+top_features: [8 项]
+[0] ('103', 86)
+[1] ('107', 19)
+[2] ('106', 14)
+[3] ('105', 7)
+[4] ('108', 4)
+[5] ('109', 3)
+[6] ('104', 2)
+[7] ('110', 2)
+completeness_analysis:
+total_files: 6
+existing_files: 6
+missing_files: 0
+completeness_rate: 100.0
+missing_file_list: [0 项]
+file_size_statistics: # 文件大小分布统计 (MB)
+============================================================
+
+数据点数量: 6
+最小值: 0.00
+最大值: 17,688.08
+平均值: 3,106.00
+中位数: 74.18
+标准差: 6,527.43
+25%分位数: 1.62
+75%分位数: 635.16
+
+分位数分布:
+1%: 0.00
+5%: 0.00
+10%: 0.00
+25%: 1.62
+50%: 74.18
+75%: 635.16
+90%: 9,243.83
+95%: 13,465.95
+99%: 16,843.65

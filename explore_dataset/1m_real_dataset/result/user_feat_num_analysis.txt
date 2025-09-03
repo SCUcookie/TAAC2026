@@ -1,0 +1,155 @@
+user_feat_num_analysis.txt:
+
+# 用户特征数量详细分析报告
+================================================================================
+
+cardinality_statistics:
+total_features: 8
+feature_counts: [8 项]
+[0] 14
+[1] 86
+[2] 19
+[3] 7
+[4] 2
+[5] 2
+[6] 3
+[7] 4
+feature_ids: [8 项]
+[0] 106
+[1] 103
+[2] 107
+[3] 105
+[4] 104
+[5] 110
+[6] 109
+[7] 108
+cardinality_stats:
+min: 2
+max: 86
+mean: 17.125
+median: 5.5
+std: 26.666634114563465
+cardinality_ranges:
+二元特征 (2): 2
+小分类 (3-10): 3
+中分类 (11-50): 2
+大分类 (51-500): 1
+连续化 (501-5000): 0
+高基数 (>5000): 0
+percentiles:
+1%: 2.0
+5%: 2.0
+10%: 2.0
+25%: 2.75
+50%: 5.5
+75%: 15.25
+90%: 39.09999999999999
+95%: 62.54999999999997
+99%: 81.30999999999997
+lowest_cardinality: [8 项]
+[0] ('104', 2)
+[1] ('110', 2)
+[2] ('109', 3)
+[3] ('108', 4)
+[4] ('105', 7)
+[5] ('106', 14)
+[6] ('107', 19)
+[7] ('103', 86)
+highest_cardinality: [8 项]
+[0] ('104', 2)
+[1] ('110', 2)
+[2] ('109', 3)
+[3] ('108', 4)
+[4] ('105', 7)
+[5] ('106', 14)
+[6] ('107', 19)
+[7] ('103', 86)
+type_analysis:
+feature_types:
+demographic: [5 项]
+[0] ('105', 7)
+[1] ('104', 2)
+[2] ('110', 2)
+[3] ('109', 3)
+[4] ('108', 4)
+preference: [3 项]
+[0] ('106', 14)
+[1] ('103', 86)
+[2] ('107', 19)
+behavioral: [0 项]
+identity: [0 项]
+privacy_assessment:
+high_risk_count: 0
+medium_risk_count: 5
+low_risk_count: 3
+risk_percentages:
+high: 0.0
+medium: 62.5
+low: 37.5
+id_patterns:
+numeric_ids: [8 项]
+[0] 106
+[1] 103
+[2] 107
+[3] 105
+[4] 104
+[5] 110
+[6] 109
+[7] 108
+string_ids: [0 项]
+numeric_count: 8
+string_count: 0
+missing_ids: [0 项]
+modeling_analysis:
+modeling_strategies:
+106: Label编码或Embedding - 中等分类
+103: Target编码或Embedding - 大分类
+107: Label编码或Embedding - 中等分类
+105: One-hot编码 - 小分类特征
+104: 直接使用 - 二元特征，无需编码
+110: 直接使用 - 二元特征，无需编码
+109: One-hot编码 - 小分类特征
+108: One-hot编码 - 小分类特征
+privacy_concerns:
+106: 低风险
+103: 低风险
+107: 低风险
+105: 中风险 - 可能涉及人口统计
+104: 低风险
+110: 低风险
+109: 中风险 - 可能涉及人口统计
+108: 中风险 - 可能涉及人口统计
+strategy_distribution:
+Label编码或Embedding - 中等分类: 2
+Target编码或Embedding - 大分类: 1
+One-hot编码 - 小分类特征: 3
+直接使用 - 二元特征，无需编码: 2
+privacy_distribution:
+低风险: 5
+中风险 - 可能涉及人口统计: 3
+specialized_recommendations:
+demographic_count: 5
+preference_count: 3
+behavioral_count: 0
+identity_count: 0
+detailed_analysis:
+strategy_groups:
+可直接使用: 2
+需要编码: 6
+需要处理: 0
+建议删除: 0
+risk_assessment:
+high_risk_count: 0
+medium_risk_count: 5
+low_risk_count: 3
+risk_percentages:
+high: 0.0
+medium: 62.5
+low: 37.5
+feature_engineering_summary:
+demographic_count: 5
+preference_count: 3
+behavioral_count: 0
+identity_count: 0
+file_info:
+file_path: /data_ams/training_data/user_feat_num.json
