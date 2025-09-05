@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import time
+import psutil
 from pathlib import Path
 
 import numpy as np
@@ -73,8 +74,73 @@ def get_args():
     return args
 
 
-if __name__ == '__main__':
+class TrainingMonitor:
+    def __init__(self):
+        self.timings = {}
+        self.memory_usage = {}
+        self.start_time = time.time()
+        
+    def start_timer(self, name):
+        self.timings[name + '_start'] = time.time()
+        
+    def end_timer(self, name):
+        if name + '_start' in self.timings:
+            duration = time.time() - self.timings[name + '_start']
+            self.timings[name] = duration
+            print(f"{name}: {duration:.2f} seconds")
+    
+    def log_memory_and_gpu(self, stage):
+        memory_info = {
+            'cpu_percent': psutil.virtual_memory().percent,
+            'cpu_used_gb': psutil.virtual_memory().used / (1024**3)
+        }
+        
+        if torch.cuda.is_available():
+            memory_info['gpu_allocated_gb'] = torch.cuda.memory_allocated() / (1024**3)
+            memory_info['gpu_reserved_gb'] = torch.cuda.memory_reserved() / (1024**3)
+        
+        self.memory_usage[stage] = memory_info
+        print(f"Memory at {stage}: CPU {memory_info['cpu_percent']:.1f}% ({memory_info['cpu_used_gb']:.1f}GB)")
+        
+        if 'gpu_allocated_gb' in memory_info:
+            print(f"GPU: {memory_info['gpu_allocated_gb']:.1f}GB allocated, {memory_info['gpu_reserved_gb']:.1f}GB reserved")
+    
+    def log_training_progress(self, epoch, total_epochs, step, total_steps, loss):
+        elapsed = time.time() - self.start_time
+        progress = (epoch - 1) / total_epochs + (step + 1) / total_steps / total_epochs
+        estimated_total = elapsed / progress if progress > 0 else 0
+        remaining = estimated_total - elapsed
+        
+        print(f"Epoch {epoch}/{total_epochs}, Step {step+1}/{total_steps}, "
+              f"Loss: {loss:.4f}, Elapsed: {elapsed/60:.1f}m, Remaining: {remaining/60:.1f}m")
 
+
+def setup_cache_directories():
+    """
+    设置缓存目录
+    """
+    cache_dir = os.environ.get('USER_CACHE_PATH', './cache')
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    # 创建训练相关缓存目录
+    os.makedirs(os.path.join(cache_dir, 'embeddings'), exist_ok=True)
+    os.makedirs(os.path.join(cache_dir, 'checkpoints'), exist_ok=True)
+    
+    return cache_dir
+
+
+if __name__ == '__main__':
+    
+    # 设置缓存目录
+    cache_dir = setup_cache_directories()
+    print(f"Cache directory set up at: {cache_dir}")
+    
+    # 创建训练监控器
+    monitor = TrainingMonitor()
+    
+    monitor.start_timer("initialization")
+    monitor.log_memory_and_gpu("start")
+    
     Path(os.environ.get('TRAIN_LOG_PATH')).mkdir(parents=True, exist_ok=True)
     Path(os.environ.get('TRAIN_TF_EVENTS_PATH')).mkdir(parents=True, exist_ok=True)
     log_file = open(Path(os.environ.get('TRAIN_LOG_PATH'), 'train.log'), 'w')
@@ -91,6 +157,9 @@ if __name__ == '__main__':
     feat_statistics, feat_types = dataset.feat_statistics, dataset.feature_types
 
     model = BaselineModel(usernum, itemnum, feat_statistics, feat_types, args).to(args.device)
+    
+    monitor.end_timer("initialization")
+    monitor.log_memory_and_gpu("after_model_init")
 
     for name, param in model.named_parameters():
         if("_emb" in name):
@@ -129,13 +198,21 @@ if __name__ == '__main__':
     t0 = time.time()
     global_step = 0
     print("Start training")
+    monitor.start_timer("training")
+    
     for epoch in range(epoch_start_idx, args.num_epochs + 1):
         model.train()
-        
+        epoch_start_time = time.time()
         
         if args.inference_only:
             break
+            
         for step, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
+            # 定期记录训练进度和内存使用
+            if step % 100 == 0:
+                monitor.log_training_progress(epoch, args.num_epochs, step, len(train_loader), 0)
+                if step % 500 == 0:
+                    monitor.log_memory_and_gpu(f"epoch_{epoch}_step_{step}")
             seq, pos, neg, token_type, next_token_type, next_action_type, seq_feat, pos_feat, neg_feat = batch
             seq = seq.to(args.device)
             pos = pos.to(args.device)
@@ -252,12 +329,46 @@ if __name__ == '__main__':
             writer.add_scalar("Trainer/lr", lr, global_step)
             
             optimizer.step()
+            
+            # 定期清理GPU缓存以优化内存使用
+            if global_step % 100 == 0:
+                torch.cuda.empty_cache()
 
+        # Epoch结束时的统计和保存
+        epoch_time = time.time() - epoch_start_time
+        print(f"Epoch {epoch} completed in {epoch_time/60:.1f} minutes")
+        monitor.log_memory_and_gpu(f"epoch_{epoch}_end")
         
+        # 保存检查点（同时保存到缓存目录）
         save_dir = Path(os.environ.get('TRAIN_CKPT_PATH'), f"global_step{global_step}")
         save_dir.mkdir(parents=True, exist_ok=True)
         torch.save(model.state_dict(), save_dir / "model.pt")
+        
+        # 额外保存到缓存目录
+        cache_checkpoint_path = os.path.join(cache_dir, 'checkpoints', f'epoch_{epoch}_model.pt')
+        torch.save(model.state_dict(), cache_checkpoint_path)
+        print(f"Checkpoint cached to {cache_checkpoint_path}")
 
+    monitor.end_timer("training")
     print("Done")
+    
+    # 生成训练完成报告
+    print("\n=== Training Complete ===")
+    total_training_time = monitor.timings.get("training", 0)
+    print(f"Total training time: {total_training_time/3600:.1f} hours")
+    print(f"Average time per epoch: {total_training_time/(args.num_epochs*60):.1f} minutes")
+    
+    # 保存训练统计信息
+    training_stats = {
+        'total_time': total_training_time,
+        'epochs': args.num_epochs,
+        'global_steps': global_step,
+        'final_loss': loss.item() if 'loss' in locals() else None,
+        'memory_usage': monitor.memory_usage
+    }
+    
+    with open(os.path.join(cache_dir, 'training_stats.json'), 'w') as f:
+        json.dump(training_stats, f, indent=2)
+    
     writer.close()
     log_file.close()
