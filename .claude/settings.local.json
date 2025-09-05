@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(dir /b explore_dataset1m_real_dataset*.py)",
+      "Bash(python test:*)",
+      "Bash(python:*)",
+      "Bash(set TRAIN_LOG_PATH=./logs)",
+      "Bash(set TRAIN_TF_EVENTS_PATH=./tf_events)",
+      "Bash(set TRAIN_DATA_PATH=./dataset/TencentGR_1k)",
+      "Bash(set TRAIN_CKPT_PATH=./ckpt)",
+      "Bash(bash:*)",
+      "Bash(dir /b explore_dataset1m_real_datasetresult)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
