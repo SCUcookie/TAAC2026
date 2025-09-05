@@ -1,0 +1,37 @@
+{
+  "data_scale": {
+    "total_items_in_index": 4783154,
+    "total_users_in_index": 1001845,
+    "items_with_features": 4783154,
+    "item_feature_count": 13,
+    "user_sequences_estimate": 990532,
+    "candidate_items": 660000
+  },
+  "file_status": {
+    "indexer.pkl": "present",
+    "item_feat_dict.json": "present",
+    "item_feat_num.json": "present",
+    "predict_seq.jsonl": "present",
+    "predict_seq_offsets.pkl": "present",
+    "predict_set.jsonl": "present",
+    "user_feat_num.json": "present"
+  },
+  "feature_analysis": {
+    "predict_set_features": 14
+  },
+  "data_quality_issues": [
+    "文件过大，可能需要流式处理",
+    "Feature 117 has mixed types: ['int', 'str']",
+    "Feature 118 has mixed types: ['int', 'str']",
+    "Feature 119 has mixed types: ['int', 'str']",
+    "Feature 120 has mixed types: ['int', 'str']",
+    "Feature 121 has mixed types: ['int', 'str']",
+    "Feature 102 has mixed types: ['int', 'str']",
+    "Feature 122 has mixed types: ['int', 'str']",
+    "Feature 111 has mixed types: ['int', 'str']",
+    "Feature 115 has mixed types: ['int', 'str']"
+  ],
+  "key_findings": [
+    "Cold start scenario: 660,000 candidates vs 4,783,154 training items",
+    "Found 10 data quality issues"
+  ]

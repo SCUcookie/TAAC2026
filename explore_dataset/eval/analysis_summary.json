@@ -1,0 +1,764 @@
+{
+  "analysis_metadata": {
+    "original_file_size": 172346814,
+    "files_analyzed": 7,
+    "compression_note": "This is a compressed summary of the full analysis"
+  },
+  "files": {
+    "indexer.pkl": {
+      "file_type": "pickle",
+      "data_type": "<class 'dict'>",
+      "main_keys": [
+        "f",
+        "i",
+        "u",
+        "a"
+      ],
+      "sizes": {
+        "f": {
+          "size": 22,
+          "description": "特征值映射字典",
+          "id_range": "",
+          "feature_vocab_stats": {
+            "total_features": 22,
+            "min_vocab_size": 2,
+            "max_vocab_size": 4783154,
+            "sample_features": {
+              "101": 51,
+              "111": 4783154,
+              "102": 90709,
+              "117": 497,
+              "122": 90919,
+              "121": 2135891,
+              "119": 4191,
+              "120": 3392,
+              "118": 1426,
+              "115": 691
+            }
+          }
+        },
+        "i": {
+          "size": 4783154,
+          "description": "物品ID映射字典",
+          "id_range": "[1, 4783154]"
+        },
+        "u": {
+          "size": 1001845,
+          "description": "用户ID映射字典",
+          "id_range": "[1, 1001845]"
+        },
+        "a": {
+          "size": 2,
+          "description": "行为类型映射字典",
+          "id_range": ""
+        }
+      }
+    },
+    "item_feat_dict.json": {
+      "file_type": "json",
+      "total_items": 4783154,
+      "feature_count": 13,
+      "feature_list": [
+        "112",
+        "117",
+        "118",
+        "119",
+        "120",
+        "100",
+        "101",
+        "102",
+        "122",
+        "114",
+        "116",
+        "121",
+        "111"
+      ],
+      "sampling_info": {
+        "sample_size": 10000,
+        "total_size": 4783154,
+        "sampling_rate": 0.20906707164352226
+      },
+      "feature_analysis": {
+        "112": {
+          "completeness_rate": 98.77,
+          "data_types": [
+            "int"
+          ],
+          "mean": 23.29,
+          "std": 8.28,
+          "min": 1.0,
+          "max": 30.0,
+          "unique_count": 25
+        },
+        "117": {
+          "completeness_rate": 98.77,
+          "data_types": [
+            "int"
+          ],
+          "mean": 214.13,
+          "std": 133.45,
+          "min": 1.0,
+          "max": 491.0,
+          "unique_count": 200
+        },
+        "118": {
+          "completeness_rate": 98.77,
+          "data_types": [
+            "int"
+          ],
+          "mean": 763.18,
+          "std": 402.09,
+          "min": 1.0,
+          "max": 1425.0,
+          "unique_count": 495
+        },
+        "119": {
+          "completeness_rate": 98.77,
+          "data_types": [
+            "int"
+          ],
+          "mean": 2260.87,
+          "std": 1167.36,
+          "min": 10.0,
+          "max": 4191.0,
+          "unique_count": 980
+        },
+        "120": {
+          "completeness_rate": 98.75,
+          "data_types": [
+            "int"
+          ],
+          "mean": 1042.33,
+          "std": 778.16,
+          "min": 7.0,
+          "max": 3385.0,
+          "unique_count": 724
+        },
+        "100": {
+          "completeness_rate": 99.96000000000001,
+          "data_types": [
+            "int"
+          ],
+          "mean": 4.5,
+          "std": 1.79,
+          "min": 1.0,
+          "max": 6.0,
+          "unique_count": 6
+        },
+        "101": {
+          "completeness_rate": 99.96000000000001,
+          "data_types": [
+            "int"
+          ],
+          "mean": 23.92,
+          "std": 13.89,
+          "min": 1.0,
+          "max": 51.0,
+          "unique_count": 40
+        },
+        "102": {
+          "completeness_rate": 98.74000000000001,
+          "data_types": [
+            "int"
+          ],
+          "mean": 44702.13,
+          "std": 26181.79,
+          "min": 3.0,
+          "max": 90642.0,
+          "unique_count": 3906
+        },
+        "122": {
+          "completeness_rate": 99.96000000000001,
+          "data_types": [
+            "int"
+          ],
+          "mean": 45562.23,
+          "std": 26359.75,
+          "min": 6.0,
+          "max": 90842.0,
+          "unique_count": 3907
+        },
+        "114": {
+          "completeness_rate": 99.96000000000001,
+          "data_types": [
+            "int"
+          ],
+          "mean": 5.59,
+          "std": 4.89,
+          "min": 3.0,
+          "max": 20.0,
+          "unique_count": 15
+        },
+        "116": {
+          "completeness_rate": 99.95,
+          "data_types": [
+            "int"
+          ],
+          "mean": 7.08,
+          "std": 4.16,
+          "min": 1.0,
+          "max": 18.0,
+          "unique_count": 16
+        },
+        "121": {
+          "completeness_rate": 100.0,
+          "data_types": [
+            "int"
+          ],
+          "mean": 1069536.14,
+          "std": 615080.12,
+          "min": 2.0,
+          "max": 2134391.0,
+          "unique_count": 9106
+        },
+        "111": {
+          "completeness_rate": 100.0,
+          "data_types": [
+            "int"
+          ],
+          "mean": 2403293.62,
+          "std": 1378464.55,
+          "min": 7.0,
+          "max": 4780151.0,
+          "unique_count": 10000
+        },
+        "115": {
+          "completeness_rate": 25.55,
+          "data_types": [
+            "int"
+          ],
+          "mean": 478.1,
+          "std": 132.18,
+          "min": 4.0,
+          "max": 687.0,
+          "unique_count": 92
+        }
+      }
+    },
+    "item_feat_num.json": {
+      "file_type": "json",
+      "total_features": 14,
+      "feature_vocab_sizes": {
+        "101": 51,
+        "111": 4783154,
+        "102": 90709,
+        "117": 497,
+        "122": 90919,
+        "121": 2135891,
+        "119": 4191,
+        "120": 3392,
+        "118": 1426,
+        "115": 691,
+        "114": 20,
+        "112": 30,
+        "116": 18,
+        "100": 6
+      },
+      "statistics": {
+        "min_vocab_size": 6,
+        "max_vocab_size": 4783154,
+        "avg_vocab_size": 507928.21428571426,
+        "total_vocab_size": 7110995
+      },
+      "feature_categorization": {
+        "medium_cardinality": [
+          {
+            "feature_id": "101",
+            "vocab_size": 51
+          },
+          {
+            "feature_id": "117",
+            "vocab_size": 497
+          },
+          {
+            "feature_id": "115",
+            "vocab_size": 691
+          }
+        ],
+        "high_cardinality": [
+          {
+            "feature_id": "111",
+            "vocab_size": 4783154
+          },
+          {
+            "feature_id": "102",
+            "vocab_size": 90709
+          },
+          {
+            "feature_id": "122",
+            "vocab_size": 90919
+          },
+          {
+            "feature_id": "121",
+            "vocab_size": 2135891
+          },
+          {
+            "feature_id": "119",
+            "vocab_size": 4191
+          },
+          {
+            "feature_id": "120",
+            "vocab_size": 3392
+          },
+          {
+            "feature_id": "118",
+            "vocab_size": 1426
+          }
+        ],
+        "low_cardinality": [
+          {
+            "feature_id": "114",
+            "vocab_size": 20
+          },
+          {
+            "feature_id": "112",
+            "vocab_size": 30
+          },
+          {
+            "feature_id": "116",
+            "vocab_size": 18
+          },
+          {
+            "feature_id": "100",
+            "vocab_size": 6
+          }
+        ]
+      },
+      "comparison_with_item_features": null
+    },
+    "predict_seq.jsonl": {
+      "file_type": "jsonl",
+      "file_size_gb": 17.273510843515396,
+      "line_count_estimate": 990532,
+      "encoding_tests": {
+        "utf-8": {
+          "lines_read": 10,
+          "json_errors": 0,
+          "success": true
+        },
+        "gbk": {
+          "lines_read": 10,
+          "json_errors": 0,
+          "success": true
+        },
+        "latin1": {
+          "lines_read": 10,
+          "json_errors": 0,
+          "success": true
+        },
+        "cp1252": {
+          "lines_read": 10,
+          "json_errors": 0,
+          "success": true
+        }
+      },
+      "potential_issues": [
+        "文件过大，可能需要流式处理"
+      ],
+      "sample_records_count": 1
+    },
+    "predict_seq_offsets.pkl": {
+      "file_type": "pickle",
+      "data_type": "<class 'list'>",
+      "length": 1001845,
+      "statistics": {
+        "min_offset": 0,
+        "max_offset": 18547271610,
+        "mean_offset": 9273499549.028345,
+        "offset_range": 18547271610,
+        "avg_record_size": 18513
+      },
+      "is_sorted": true,
+      "sample_data": [
+        0,
+        17574,
+        37083,
+        55206,
+        75450,
+        95698,
+        115451,
+        133975,
+        154091,
+        173216,
+        192026,
+        210607,
+        227921,
+        247570,
+        261303,
+        281884,
+        301614,
+        319310,
+        336440,
+        356046
+      ]
+    },
+    "predict_set.jsonl": {
+      "file_type": null,
+      "basic_stats": {
+        "total_records": 660000,
+        "unique_creative_ids": 660000,
+        "unique_retrieval_ids": 660000
+      },
+      "feature_types": {
+        "112": [
+          "int"
+        ],
+        "117": [
+          "int",
+          "str"
+        ],
+        "118": [
+          "int",
+          "str"
+        ],
+        "119": [
+          "int",
+          "str"
+        ],
+        "120": [
+          "int",
+          "str"
+        ],
+        "121": [
+          "int",
+          "str"
+        ],
+        "100": [
+          "int"
+        ],
+        "101": [
+          "int"
+        ],
+        "102": [
+          "int",
+          "str"
+        ],
+        "122": [
+          "int",
+          "str"
+        ],
+        "111": [
+          "int",
+          "str"
+        ],
+        "114": [
+          "int"
+        ],
+        "116": [
+          "int"
+        ],
+        "115": [
+          "int",
+          "str"
+        ]
+      },
+      "numeric_features_summary": {
+        "112": {
+          "count": 654893,
+          "mean": 24.59,
+          "std": 7.77,
+          "min": "1",
+          "max": "30",
+          "unique_count": 27
+        },
+        "117": {
+          "count": 654892,
+          "mean": 213.57,
+          "std": 140.07,
+          "min": "1",
+          "max": "496",
+          "unique_count": 360
+        },
+        "118": {
+          "count": 654881,
+          "mean": 759.09,
+          "std": 394.36,
+          "min": "1",
+          "max": "1426",
+          "unique_count": 1020
+        },
+        "119": {
+          "count": 654858,
+          "mean": 2208.67,
+          "std": 1200.4,
+          "min": "3",
+          "max": "4191",
+          "unique_count": 2859
+        },
+        "120": {
+          "count": 654852,
+          "mean": 1104.9,
+          "std": 841.18,
+          "min": "1",
+          "max": "3391",
+          "unique_count": 2460
+        },
+        "121": {
+          "count": 606844,
+          "mean": 1066137.52,
+          "std": 617310.43,
+          "min": "1",
+          "max": "2135886",
+          "unique_count": 295858
+        },
+        "100": {
+          "count": 659206,
+          "mean": 4.95,
+          "std": 1.6,
+          "min": "1",
+          "max": "6",
+          "unique_count": 6
+        },
+        "101": {
+          "count": 659206,
+          "mean": 22.67,
+          "std": 13.91,
+          "min": "1",
+          "max": "51",
+          "unique_count": 49
+        },
+        "102": {
+          "count": 651574,
+          "mean": 45020.55,
+          "std": 26251.42,
+          "min": "1",
+          "max": "90702",
+          "unique_count": 30332
+        },
+        "122": {
+          "count": 656925,
+          "mean": 45401.02,
+          "std": 26273.01,
+          "min": "1",
+          "max": "90881",
+          "unique_count": 30376
+        },
+        "111": {
+          "count": 511029,
+          "mean": 2390049.73,
+          "std": 1380397.32,
+          "min": "1",
+          "max": "4783147",
+          "unique_count": 511029
+        },
+        "114": {
+          "count": 659093,
+          "mean": 6.31,
+          "std": 5.31,
+          "min": "2",
+          "max": "20",
+          "unique_count": 18
+        },
+        "116": {
+          "count": 659090,
+          "mean": 6.55,
+          "std": 4.01,
+          "min": "1",
+          "max": "18",
+          "unique_count": 18
+        },
+        "115": {
+          "count": 195545,
+          "mean": 493.38,
+          "std": 116.91,
+          "min": "3",
+          "max": "689",
+          "unique_count": 301
+        }
+      },
+      "sample_records": [
+        {
+          "features": {
+            "112": 29,
+            "117": 389,
+            "118": 572,
+            "119": 667,
+            "120": 621,
+            "121": 794587,
+            "100": 6,
+            "101": 42,
+            "102": 63599,
+            "122": 28134,
+            "111": 1143336,
+            "114": 3,
+            "116": 7
+          },
+          "creative_id": 20000006363,
+          "reid_creative_id": 15543,
+          "retrieval_id": 0
+        },
+        {
+          "features": {
+            "112": 29,
+            "117": 201,
+            "118": 107,
+            "119": 3116,
+            "120": 1124,
+            "100": 6,
+            "101": 22,
+            "102": 46781,
+            "122": 80452,
+            "114": 3,
+            "115": 368,
+            "116": 2,
+            "121": 1821550,
+            "111": 387283
+          },
+          "creative_id": 20000016200,
+          "reid_creative_id": 2181372,
+          "retrieval_id": 1
+        },
+        {
+          "features": {
+            "112": 28,
+            "117": 425,
+            "118": 1425,
+            "119": 1578,
+            "120": 3313,
+            "121": 1980788,
+            "100": 4,
+            "101": 9,
+            "102": 61049,
+            "122": 13072,
+            "111": 2154230,
+            "114": 8,
+            "116": 12
+          },
+          "creative_id": 20000016475,
+          "reid_creative_id": 1373389,
+          "retrieval_id": 2
+        },
+        {
+          "features": {
+            "112": 29,
+            "117": 167,
+            "118": 480,
+            "119": 1762,
+            "120": 640,
+            "121": 857512,
+            "100": 6,
+            "101": 17,
+            "102": 52815,
+            "122": 13825,
+            "111": 1098429,
+            "114": 3,
+            "115": 431,
+            "116": 2
+          },
+          "creative_id": 20000018082,
+          "reid_creative_id": 4255992,
+          "retrieval_id": 3
+        },
+        {
+          "features": {
+            "112": 29,
+            "117": 33,
+            "118": 519,
+            "119": 3766,
+            "120": 3249,
+            "121": 365152,
+            "100": 6,
+            "101": 42,
+            "102": 21061,
+            "122": 62653,
+            "111": "1111883911",
+            "114": 3,
+            "116": 7
+          },
+          "creative_id": 20000018288,
+          "reid_creative_id": 0,
+          "retrieval_id": 4
+        }
+      ]
+    },
+    "user_feat_num.json": {
+      "file_type": "json",
+      "total_features": 8,
+      "feature_vocab_sizes": {
+        "106": 14,
+        "103": 86,
+        "107": 19,
+        "105": 7,
+        "104": 2,
+        "110": 2,
+        "109": 3,
+        "108": 4
+      },
+      "statistics": {
+        "min_vocab_size": 2,
+        "max_vocab_size": 86,
+        "avg_vocab_size": 17.125,
+        "total_vocab_size": 137
+      },
+      "feature_categorization": {
+        "low_cardinality": [
+          {
+            "feature_id": "106",
+            "vocab_size": 14
+          },
+          {
+            "feature_id": "107",
+            "vocab_size": 19
+          },
+          {
+            "feature_id": "105",
+            "vocab_size": 7
+          },
+          {
+            "feature_id": "104",
+            "vocab_size": 2
+          },
+          {
+            "feature_id": "110",
+            "vocab_size": 2
+          },
+          {
+            "feature_id": "109",
+            "vocab_size": 3
+          },
+          {
+            "feature_id": "108",
+            "vocab_size": 4
+          }
+        ],
+        "medium_cardinality": [
+          {
+            "feature_id": "103",
+            "vocab_size": 86
+          }
+        ]
+      },
+      "comparison_with_item_features": {
+        "user_only_features": [
+          "106",
+          "104",
+          "105",
+          "108",
+          "110",
+          "107",
+          "109",
+          "103"
+        ],
+        "item_only_features": [
+          "121",
+          "115",
+          "111",
+          "122",
+          "114",
+          "112",
+          "120",
+          "102",
+          "116",
+          "117",
+          "101",
+          "118",
+          "119",
+          "100"
+        ],
+        "common_features": [],
+        "user_feature_count": 8,
+        "item_feature_count": 14
+      }
+    }
+  }
+
