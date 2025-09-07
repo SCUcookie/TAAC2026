@@ -1,3 +1,6 @@
+# 全模态生成式推荐模型架构定义
+# 包含基于Transformer的序列推荐模型和多种注意力机制
+
 import math
 from pathlib import Path
 import torch.nn as nn
@@ -6,24 +9,45 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-from dataset import save_emb
+from dataset import save_emb  # 导入embedding保存函数
 
 
 class RotaryEmbedding(torch.nn.Module):
+    """
+    旋转位置编码（RoPE - Rotary Position Embedding）
+    相比传统位置编码，RoPE能更好地建模序列中token之间的相对位置关系
+    
+    Args:
+        head_dim: 注意力头的维度，必须为偶数
+        base: 旋转频率的基数，默认10000
+    """
     def __init__(self, head_dim, base=10000):
         super().__init__()
         assert head_dim % 2 == 0, "head_dim must be even for RoPE"
         self.head_dim = head_dim
+        # 计算逆频率：用于生成不同维度的旋转频率
         inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
+        self.register_buffer("inv_freq", inv_freq, persistent=False)  # 注册为缓冲区，不参与梯度计算
 
     def get_cos_sin(self, positions, dtype, device):
-        # positions: [s] 或 [b, s]
+        """
+        根据位置信息计算旋转编码的cos和sin值
+        
+        Args:
+            positions: 位置索引，形状为[s]或[b,s]
+            dtype: 数据类型
+            device: 计算设备
+            
+        Returns:
+            cos, sin: 旋转编码的cos和sin值
+        """
         if positions.dim() == 1:
+            # 一维位置：计算角度并转换为cos/sin
             angles = positions[:, None].to(device).float() * self.inv_freq[None, :]
             cos = angles.cos().to(dtype)[None, None, :, :]  # [1,1,s,d/2]
             sin = angles.sin().to(dtype)[None, None, :, :]
         else:
+            # 二维位置：批量处理
             angles = positions[..., None].to(device).float() * self.inv_freq[None, None, :]
             cos = angles.cos().to(dtype)[:, None, :, :]     # [b,1,s,d/2]
             sin = angles.sin().to(dtype)[:, None, :, :]
@@ -31,10 +55,20 @@ class RotaryEmbedding(torch.nn.Module):
 
     @staticmethod
     def apply_rotary(x, cos, sin):
-        # x: [b, n, s, d]
-        x1 = x[..., 0::2]
-        x2 = x[..., 1::2]
-        rotated_x1 = x1 * cos - x2 * sin
+        """
+        将旋转位置编码应用到input tensor上
+        
+        Args:
+            x: 输入tensor，形状为[b, n, s, d]
+            cos, sin: 旋转编码的cos和sin值
+            
+        Returns:
+            out: 应用旋转编码后的tensor
+        """
+        # 将奇偶维度分离并应用旋转变换
+        x1 = x[..., 0::2]  # 奇数维度
+        x2 = x[..., 1::2]  # 偶数维度
+        rotated_x1 = x1 * cos - x2 * sin  # 旋转变换公式
         rotated_x2 = x1 * sin + x2 * cos
         out = torch.empty_like(x)
         out[..., 0::2] = rotated_x1
@@ -43,21 +77,29 @@ class RotaryEmbedding(torch.nn.Module):
 
 
 class SENet(nn.Module):
+    """
+    SE-Net (Squeeze-and-Excitation Networks) 注意力机制
+    用于自动学习特征通道间的重要性权重，提升模型对重要特征的关注度
+    
+    Args:
+        num_features: 特征数量
+        feature_dim: 每个特征的维度
+        reduction_ratio: 降维比例，用于减少参数量
+    """
     def __init__(self, num_features, feature_dim, reduction_ratio=4):
-        
         super(SENet, self).__init__()
         self.num_features = num_features
         self.feature_dim = feature_dim
         
-        # Squeeze操作: 全局平均池化
+        # Squeeze操作：通过全局平均池化获取每个特征通道的全局信息
         self.squeeze = nn.AdaptiveAvgPool1d(1)
         
-        # Excitation操作
+        # Excitation操作：通过两层全连接网络学习特征通道重要性权重
         self.excitation = nn.Sequential(
-            nn.Linear(num_features, num_features // reduction_ratio, bias=False),
+            nn.Linear(num_features, num_features // reduction_ratio, bias=False),  # 降维
             nn.ReLU(inplace=True),
-            nn.Linear(num_features // reduction_ratio, num_features, bias=False),
-            nn.Sigmoid()
+            nn.Linear(num_features // reduction_ratio, num_features, bias=False),  # 升维
+            nn.Sigmoid()  # 输出0-1的权重
         )
         
     def forward(self, x):
@@ -89,31 +131,57 @@ class SENet(nn.Module):
         return weighted_features
 
 def truncated_normal(x: torch.Tensor, mean: float, std: float) -> torch.Tensor:
+    """
+    截断正态分布初始化
+    生成截断在[-2σ, 2σ]范围内的正态分布随机数，避免极端值影响训练稳定性
+    
+    Args:
+        x: 要初始化的tensor
+        mean: 正态分布的均值
+        std: 正态分布的标准差
+        
+    Returns:
+        x: 初始化后的tensor
+    """
     with torch.no_grad():
         size = x.shape
+        # 生成4倍大小的正态分布样本，用于筛选有效值
         tmp = x.new_empty(size + (4,)).normal_()
-        valid = (tmp < 2) & (tmp > -2)
-        ind = valid.max(-1, keepdim=True)[1]
+        valid = (tmp < 2) & (tmp > -2)  # 找出在[-2, 2]范围内的值
+        ind = valid.max(-1, keepdim=True)[1]  # 选择每个位置的第一个有效值
         x.data.copy_(tmp.gather(-1, ind).squeeze(-1))
-        x.data.mul_(std).add_(mean)
+        x.data.mul_(std).add_(mean)  # 缩放到指定的均值和标准差
         return x
 
 class FlashMultiHeadAttention(torch.nn.Module):
+    """
+    改进的多头注意力机制，融合了旋转位置编码(RoPE)和门控机制
+    相比标准Transformer注意力，具有更好的位置建模能力和表达能力
+    
+    Args:
+        hidden_units: 隐藏层维度
+        num_heads: 注意力头数
+        dropout_rate: Dropout比例
+    """
     def __init__(self, hidden_units, num_heads, dropout_rate):
         super(FlashMultiHeadAttention, self).__init__()
 
         self.hidden_units = hidden_units
         self.num_heads = num_heads
-        self.head_dim = hidden_units // num_heads
+        self.head_dim = hidden_units // num_heads  # 每个头的维度
         self.dropout_rate = dropout_rate
-        self._eps = 1e-6
+        self._eps = 1e-6  # Layer Norm的epsilon值
         assert hidden_units % num_heads == 0, "hidden_units must be divisible by num_heads"
 
-
+        # 旋转位置编码
         self.rope = RotaryEmbedding(self.head_dim)
+        
+        # Q, K, V投影层
         self.q_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.k_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.v_linear = torch.nn.Linear(hidden_units, hidden_units)
+        
+        # 门控机制：用于控制注意力输出的重要性
         self.u_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.out_linear = torch.nn.Linear(hidden_units, hidden_units)
 
@@ -180,25 +248,37 @@ class PointWiseFeedForward(torch.nn.Module):
 
 class BaselineModel(torch.nn.Module):
     """
+    全模态生成式推荐系统的核心模型
+    基于Transformer架构，融合多种特征类型（稀疏、数组、连续、多模态embedding）
+    支持InfoNCE对比学习和传统BCE损失训练
+    
+    模型特点：
+    1. 多模态特征融合：支持文本、图像等多种模态特征
+    2. SE-Net注意力机制：自动学习特征重要性权重
+    3. 旋转位置编码(RoPE)：更好的序列位置建模
+    4. 对比学习：通过InfoNCE损失学习用户偏好表征
+    
     Args:
-        user_num: 用户数量
-        item_num: 物品数量
-        feat_statistics: 特征统计信息，key为特征ID，value为特征数量
-        feat_types: 各个特征的特征类型，key为特征类型名称，value为包含的特征ID列表，包括user和item的sparse, array, emb, continual类型
-        args: 全局参数
+        user_num: 用户总数量
+        item_num: 物品总数量
+        feat_statistics: 特征统计信息字典，key为特征ID，value为该特征的取值数量
+        feat_types: 特征类型分组字典，包含user和item的sparse/array/emb/continual类型
+        args: 全局参数配置
 
     Attributes:
         user_num: 用户数量
         item_num: 物品数量
-        dev: 设备
-        norm_first: 是否先归一化
-        maxlen: 序列最大长度
-        item_emb: Item Embedding Table
-        user_emb: User Embedding Table
-        sparse_emb: 稀疏特征Embedding Table
-        emb_transform: 多模态特征的线性变换
-        userdnn: 用户特征拼接后经过的全连接层
-        itemdnn: 物品特征拼接后经过的全连接层
+        dev: 计算设备（GPU/CPU）
+        norm_first: 是否在attention前先进行layer norm
+        maxlen: 用户序列最大长度
+        item_emb: 物品ID的Embedding查找表
+        user_emb: 用户ID的Embedding查找表
+        sparse_emb: 稀疏特征的Embedding查找表字典
+        emb_transform: 多模态特征的线性变换层字典
+        userdnn: 用户特征融合后的全连接层
+        itemdnn: 物品特征融合后的全连接层
+        attention_layers: Transformer注意力层列表
+        forward_layers: 前馈网络层列表
     """
 
     def __init__(self, user_num, item_num, feat_statistics, feat_types, args):  #

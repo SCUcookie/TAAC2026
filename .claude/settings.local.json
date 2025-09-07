@@ -13,7 +13,21 @@
       "Bash(dir /b explore_dataset1m_real_datasetresult)",
       "Bash(dir:*)",
       "Bash(tree:*)",
-      "Bash(if exist temp_test_data rmdir /s /q temp_test_data)"
+      "Bash(if exist temp_test_data rmdir /s /q temp_test_data)",
+      "Bash(cp:*)",
+      "Bash(set EVAL_DATA_PATH=./dataset/TencentGR_eval)",
+      "Bash(EVAL_DATA_PATH=./dataset/TencentGR_eval MODEL_OUTPUT_PATH=./ckpt/global_step60 PYTHONUNBUFFERED=1 USER_CACHE_PATH=./cache EVAL_RESULT_PATH=./eval_cache python infer.py)",
+      "Bash(EVAL_DATA_PATH=./dataset/TencentGR_eval USER_CACHE_PATH=./cache python extract_related_eval_data.py --output_path ./dataset/TencentGR_eval)",
+      "Bash(set MODEL_OUTPUT_PATH=./ckpt/global_step60)",
+      "Bash(set PYTHONUNBUFFERED=1)",
+      "Bash(set USER_CACHE_PATH=./cache)",
+      "Bash(set EVAL_RESULT_PATH=./eval_cache)",
+      "Bash(set \"EVAL_DATA_PATH=./dataset/TencentGR_eval\")",
+      "Bash(set \"MODEL_OUTPUT_PATH=./ckpt/global_step60\")",
+      "Bash(set \"PYTHONUNBUFFERED=1\")",
+      "Bash(set \"USER_CACHE_PATH=./cache\")",
+      "Bash(set \"EVAL_RESULT_PATH=./eval_cache\")",
+      "Bash(test_infer.bat)"
     ],
     "deny": [],
     "ask": []

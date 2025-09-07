@@ -1,3 +1,6 @@
+# 全模态生成式推荐系统 - 推理模块
+# 用于模型推理和生成Top-K推荐结果
+
 import argparse
 import json
 import os
@@ -9,14 +12,26 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from dataset import MyTestDataset, save_emb
-from model import BaselineModel
+from dataset import MyTestDataset, save_emb  # 导入测试数据集和embedding保存函数
+from model import BaselineModel  # 导入基线模型
 
 
 def get_ckpt_path():
+    """
+    获取训练好的模型检查点文件路径
+    从环境变量MODEL_OUTPUT_PATH指定的目录中查找.pt文件
+    
+    Returns:
+        str: 模型检查点文件的完整路径
+        
+    Raises:
+        ValueError: 如果MODEL_OUTPUT_PATH环境变量未设置
+    """
     ckpt_path = os.environ.get("MODEL_OUTPUT_PATH")
     if ckpt_path is None:
         raise ValueError("MODEL_OUTPUT_PATH is not set")
+    
+    # 遍历目录找到.pt模型文件
     for item in os.listdir(ckpt_path):
         if item.endswith(".pt"):
             return os.path.join(ckpt_path, item)
@@ -148,64 +163,100 @@ def get_candidate_emb(indexer, feat_types, feat_default_value, mm_emb_dict, mode
 
 
 def infer():
+    """
+    主推理函数：生成用户推荐结果
+    
+    推理流程：
+    1. 加载测试数据集和预训练模型
+    2. 对每个用户生成序列表征embedding
+    3. 构建候选物品库的embedding
+    4. 使用FAISS进行近似最近邻搜索
+    5. 返回每个用户的Top-10推荐列表
+    
+    Returns:
+        top10s: 每个用户的Top-10推荐物品ID列表
+        user_list: 用户ID列表
+    """
+    # 解析推理参数
     args = get_args()
     data_path = os.environ.get('EVAL_DATA_PATH')
+    
+    # 创建测试数据集和数据加载器
     test_dataset = MyTestDataset(data_path, args)
     test_loader = DataLoader(
         test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=0, collate_fn=test_dataset.collate_fn
     )
+    
+    # 获取数据集基本信息
     usernum, itemnum = test_dataset.usernum, test_dataset.itemnum
     feat_statistics, feat_types = test_dataset.feat_statistics, test_dataset.feature_types
+    
+    # 创建模型并加载预训练权重
     model = BaselineModel(usernum, itemnum, feat_statistics, feat_types, args).to(args.device)
-    model.eval()
+    model.eval()  # 设置为评估模式
 
-    ckpt_path = get_ckpt_path()
+    ckpt_path = get_ckpt_path()  # 获取模型检查点路径
     model.load_state_dict(torch.load(ckpt_path, map_location=torch.device(args.device)))
-    all_embs = []
-    user_list = []
+    
+    # 生成用户序列表征embedding
+    all_embs = []  # 存储所有用户的embedding
+    user_list = []  # 存储用户ID列表
+    
+    print("Generating user embeddings...")
     for step, batch in tqdm(enumerate(test_loader), total=len(test_loader)):
-
         seq, token_type, seq_feat, user_id = batch
         seq = seq.to(args.device)
+        
+        # 模型推理：生成用户序列的表征向量
         logits = model.predict(seq, seq_feat, token_type)
+        
+        # 收集每个用户的embedding
         for i in range(logits.shape[0]):
             emb = logits[i].unsqueeze(0).detach().cpu().numpy().astype(np.float32)
             all_embs.append(emb)
         user_list += user_id
 
-    # 生成候选库的embedding 以及 id文件
+    # 生成候选物品库的embedding和ID映射文件
+    print("Generating candidate item embeddings...")
     retrieve_id2creative_id = get_candidate_emb(
-        test_dataset.indexer['i'],
-        test_dataset.feature_types,
-        test_dataset.feature_default_value,
-        test_dataset.mm_emb_dict,
-        model,
+        test_dataset.indexer['i'],  # 物品索引映射
+        test_dataset.feature_types,  # 特征类型信息
+        test_dataset.feature_default_value,  # 特征默认值
+        test_dataset.mm_emb_dict,  # 多模态embedding字典
+        model,  # 训练好的模型
     )
+    
+    # 合并所有用户embedding并保存为query文件
     all_embs = np.concatenate(all_embs, axis=0)
-    # 保存query文件
     save_emb(all_embs, Path(os.environ.get('EVAL_RESULT_PATH'), 'query.fbin'))
-    # ANN 检索
+    
+    # 使用FAISS进行近似最近邻(ANN)检索
+    # 这里调用预编译的FAISS工具进行高效的向量检索
+    print("Performing ANN search with FAISS...")
     ann_cmd = (
         str(Path("/workspace", "faiss-based-ann", "faiss_demo"))
-        + " --dataset_vector_file_path="
-        + str(Path(os.environ.get("EVAL_RESULT_PATH"), "embedding.fbin"))
-        + " --dataset_id_file_path="
-        + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id.u64bin"))
-        + " --query_vector_file_path="
-        + str(Path(os.environ.get("EVAL_RESULT_PATH"), "query.fbin"))
-        + " --result_id_file_path="
-        + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))
-        + " --query_ann_top_k=10 --faiss_M=64 --faiss_ef_construction=1280 --query_ef_search=640 --faiss_metric_type=0"
+        + " --dataset_vector_file_path="  + str(Path(os.environ.get("EVAL_RESULT_PATH"), "embedding.fbin"))  # 候选库embedding文件
+        + " --dataset_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id.u64bin"))  # 候选库ID文件
+        + " --query_vector_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "query.fbin"))  # 用户query文件
+        + " --result_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))  # 结果文件
+        + " --query_ann_top_k=10"  # 返回Top-10结果
+        + " --faiss_M=64 --faiss_ef_construction=1280 --query_ef_search=640"  # FAISS参数配置
+        + " --faiss_metric_type=0"  # 相似度度量类型（0为内积）
     )
-    os.system(ann_cmd)
+    os.system(ann_cmd)  # 执行FAISS检索命令
 
-    # 取出top-k
+    # 读取检索结果并转换为最终推荐列表
+    print("Processing search results...")
     top10s_retrieved = read_result_ids(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))
     top10s_untrimmed = []
-    for top10 in tqdm(top10s_retrieved):
+    
+    # 将检索到的retrieval_id转换为creative_id
+    for top10 in tqdm(top10s_retrieved, desc="Converting IDs"):
         for item in top10:
-            top10s_untrimmed.append(retrieve_id2creative_id.get(int(item), 0))
+            creative_id = retrieve_id2creative_id.get(int(item), 0)
+            top10s_untrimmed.append(creative_id)
 
+    # 将结果重新组织为每个用户的Top-10列表
     top10s = [top10s_untrimmed[i : i + 10] for i in range(0, len(top10s_untrimmed), 10)]
 
     return top10s, user_list

@@ -1,5 +1,7 @@
+# 全模态生成式推荐系统 - 数据集处理模块
+# 处理用户序列数据、多模态特征和负采样
+
 import json
-import mmap
 import pickle
 import struct
 from pathlib import Path
@@ -11,79 +13,83 @@ from tqdm import tqdm
 
 class MyDataset(torch.utils.data.Dataset):
     """
-    用户序列数据集
+    训练用的用户序列数据集类
+    负责加载和处理用户历史行为序列，以及各种特征信息
+    
+    数据格式说明：
+    - 用户序列包含用户行为和物品交互的时间序列
+    - 支持多种特征类型：稀疏特征、数组特征、连续特征、多模态embedding特征
+    - 自动进行负采样生成训练样本
+    - 支持动作类型权重（区分曝光和点击）
 
     Args:
-        data_dir: 数据文件目录
-        args: 全局参数
+        data_dir: 训练数据文件目录路径
+        args: 全局参数配置对象
 
     Attributes:
-        data_dir: 数据文件目录
-        maxlen: 最大长度
-        item_feat_dict: 物品特征字典
-        mm_emb_ids: 激活的mm_emb特征ID
-        mm_emb_dict: 多模态特征字典
-        itemnum: 物品数量
-        usernum: 用户数量
-        indexer_i_rev: 物品索引字典 (reid -> item_id)
-        indexer_u_rev: 用户索引字典 (reid -> user_id)
-        indexer: 索引字典
-        feature_default_value: 特征缺省值
-        feature_types: 特征类型，分为user和item的sparse, array, emb, continual类型
-        feat_statistics: 特征统计信息，包括user和item的特征数量
+        data_dir: 数据文件目录路径
+        maxlen: 用户序列最大长度
+        item_feat_dict: 物品特征字典，key为物品ID，value为特征字典
+        mm_emb_ids: 激活的多模态embedding特征ID列表(如81-86)
+        mm_emb_dict: 多模态特征embedding字典
+        itemnum: 物品总数量
+        usernum: 用户总数量
+        indexer_i_rev: 物品索引反向映射字典 (重编码ID -> 原始物品ID)
+        indexer_u_rev: 用户索引反向映射字典 (重编码ID -> 原始用户ID)
+        indexer: 完整的索引映射字典
+        feature_default_value: 各特征的默认填充值
+        feature_types: 特征类型分组（user/item的sparse/array/emb/continual类型）
+        feat_statistics: 特征统计信息（各特征的取值数量等）
     """
-    _global_seq_offsets = None
-    _global_mm_emb_dict = None
-    _global_item_feat_dict = None
-    _global_indexer = None
 
     def __init__(self, data_dir, args):
         """
-        初始化数据集
+        初始化训练数据集
+        加载用户序列数据、物品特征、多模态embedding等所有必要信息
+        
+        Args:
+            data_dir: 训练数据目录路径
+            args: 包含maxlen、mm_emb_id等参数的配置对象
         """
         super().__init__()
         self.data_dir = Path(data_dir)
+        self._load_data_and_offsets()  # 加载用户序列数据和文件偏移量
+        self.maxlen = args.maxlen  # 用户序列最大长度
+        self.mm_emb_ids = args.mm_emb_id  # 激活的多模态特征ID列表
+
+        # 加载物品特征字典：包含所有物品的各种特征信息
+        self.item_feat_dict = json.load(open(Path(data_dir, "item_feat_dict.json"), 'r'))
         
-        if MyDataset._global_seq_offsets is None:
-            with open(Path(data_dir, 'seq_offsets.pkl'), 'rb') as f:
-                MyDataset._global_seq_offsets = pickle.load(f)
+        # 加载多模态特征embedding（如图像、文本特征的预训练向量）
+        self.mm_emb_dict = load_mm_emb(Path(data_dir, "creative_emb"), self.mm_emb_ids)
         
-        self.seq_offsets = MyDataset._global_seq_offsets
-        
-        self.maxlen = args.maxlen
-        self.mm_emb_ids = args.mm_emb_id
-        
+        # 加载索引映射字典：用于原始ID和重编码ID之间的转换
+        with open(self.data_dir / 'indexer.pkl', 'rb') as ff:
+            indexer = pickle.load(ff)
+            self.itemnum = len(indexer['i'])  # 物品数量
+            self.usernum = len(indexer['u'])  # 用户数量
+            
+        # 创建反向索引：从重编码ID映射回原始ID
+        self.indexer_i_rev = {v: k for k, v in indexer['i'].items()}
+        self.indexer_u_rev = {v: k for k, v in indexer['u'].items()}
+        self.indexer = indexer
 
-
-        self.max_array_len = 10
-
-        if MyDataset._global_mm_emb_dict is None:
-            MyDataset._global_mm_emb_dict = load_mm_emb(Path(data_dir, "creative_emb"), self.mm_emb_ids)
-        self.mm_emb_dict =  MyDataset._global_mm_emb_dict
-
-
-        if MyDataset._global_item_feat_dict is None:
-            with open(Path(data_dir, "item_feat_dict.json"), 'r') as f:
-                MyDataset._global_item_feat_dict = json.load(f)
-        self.item_feat_dict = MyDataset._global_item_feat_dict
-
-        if MyDataset._global_indexer is None:
-            with open(self.data_dir / 'indexer.pkl', 'rb') as ff:
-                MyDataset._global_indexer = pickle.load(ff)
-        self.itemnum = len(MyDataset._global_indexer['i'])
-        self.usernum = len(MyDataset._global_indexer['u'])
-
-        self.indexer_i_rev = {v: k for k, v in MyDataset._global_indexer['i'].items()}
-        self.indexer_u_rev = {v: k for k, v in MyDataset._global_indexer['u'].items()}
-        self.indexer = MyDataset._global_indexer
-
+        # 初始化特征相关信息：默认值、类型分组、统计信息
         self.feature_default_value, self.feature_types, self.feat_statistics = self._init_feat_info()
 
-    def _init_file_handle(self):
-        """每个worker初始化自己的文件句柄"""
-        if not hasattr(self, '_local_data_file'):
-            self._local_data_file = open(self.data_dir / "seq.jsonl", 'rb')
+    def _load_data_and_offsets(self):
+        """
+        加载用户序列数据文件和每一行的文件偏移量（预处理好的）
+        使用文件偏移量可以实现快速的随机访问，避免将所有数据加载到内存中
+        这对于大规模数据集非常重要，可以节省内存并提高I/O效率
+        """
+        # 打开用户序列数据文件（二进制模式以提高读取速度）
+        self.data_file = open(self.data_dir / "seq.jsonl", 'rb')
         
+        # 加载预处理好的文件偏移量，用于快速定位每个用户的数据
+        with open(Path(self.data_dir, 'seq_offsets.pkl'), 'rb') as f:
+            self.seq_offsets = pickle.load(f)
+
     def _load_user_data(self, uid):
         """
         从数据文件中加载单个用户的数据
@@ -94,12 +100,9 @@ class MyDataset(torch.utils.data.Dataset):
         Returns:
             data: 用户序列数据，格式为[(user_id, item_id, user_feat, item_feat, action_type, timestamp)]
         """
-        
-        self._init_file_handle()  # 确保文件句柄存在
-        self._local_data_file.seek(self.seq_offsets[uid])
-        line = self._local_data_file.readline()
+        self.data_file.seek(self.seq_offsets[uid])
+        line = self.data_file.readline()
         data = json.loads(line)
-
         return data
 
     def _random_neq(self, l, r, s):
@@ -118,26 +121,6 @@ class MyDataset(torch.utils.data.Dataset):
         while t in s or str(t) not in self.item_feat_dict:
             t = np.random.randint(l, r)
         return t
-
-    def _random_neqs(self, l, r, s, num):
-        """
-        生成一个不在序列s中的不重复的随机整数数组t，长度为num, 用于训练时的负采样
-
-        Args:
-            l: 随机整数的最小值
-            r: 随机整数的最大值
-            s: 序列
-            num: 需要生成的随机数数量
-
-        Returns:
-            t: 不在序列s中的随机整数数组
-        """
-        t = set()
-        while len(t) < num:
-            candidate = np.random.randint(l, r)
-            if candidate not in s and str(candidate) in self.item_feat_dict and candidate not in t:
-                t.add(candidate)
-        return np.array(list(t), dtype=np.int64)
 
     def __getitem__(self, uid):
         """
@@ -211,63 +194,8 @@ class MyDataset(torch.utils.data.Dataset):
         seq_feat = np.where(seq_feat == None, self.feature_default_value, seq_feat)
         pos_feat = np.where(pos_feat == None, self.feature_default_value, pos_feat)
         neg_feat = np.where(neg_feat == None, self.feature_default_value, neg_feat)
-        
-        seq_feat = self.all_feat2tensor(seq_feat)
-        pos_feat = self.all_feat2tensor(pos_feat)
-        neg_feat = self.all_feat2tensor(neg_feat)
 
         return seq, pos, neg, token_type, next_token_type, next_action_type, seq_feat, pos_feat, neg_feat
-    
-    def all_feat2tensor(self, seq_feature):
-        all_feat_in_tensor = {}
-        all_feat_types = [self.ITEM_SPARSE_FEAT, self.ITEM_ARRAY_FEAT, self.ITEM_CONTINUAL_FEAT, self.USER_SPARSE_FEAT, self.USER_ARRAY_FEAT, self.USER_CONTINUAL_FEAT]
-
-        for feat_dict in all_feat_types:
-            for k in feat_dict:
-                tensor_feature = self.feat2tensor(seq_feature, k)
-                all_feat_in_tensor[k] = tensor_feature
-        
-        for k in self.ITEM_EMB_FEAT:
-            max_seq_len = self.maxlen+1
-            emb_dim = self.ITEM_EMB_FEAT[k]
-            seq_emb_data = np.zeros((max_seq_len, emb_dim), dtype=np.float32)
-            for i, item in enumerate(seq_feature):
-                if k in item:
-                    seq_emb_data[i] = item[k]
-            all_feat_in_tensor[k] = torch.from_numpy(seq_emb_data)
-
-        return all_feat_in_tensor
-
-    def feat2tensor(self, seq_feature, k):
-        """
-        Args:
-            seq_feature: 序列特征list，每个元素为当前时刻的特征字典，形状为 [batch_size, maxlen]
-            k: 特征ID
-
-        Returns:
-            batch_data: 特征值的tensor，形状为 [batch_size, maxlen, max_array_len(if array)]
-        """
-
-        if k in self.ITEM_ARRAY_FEAT or k in self.USER_ARRAY_FEAT:
-            # 如果特征是Array类型，需要先对array进行padding，然后转换为tensor
-            
-            max_seq_len = 0
-
-            seq_data = [item[k] for item in seq_feature]
-            max_seq_len = self.maxlen+1
-            max_array_len = self.max_array_len
-
-            pad_seq_data = np.zeros((max_seq_len, max_array_len), dtype=np.int64)
-            
-            for i, item_data in enumerate(seq_data):
-                actual_len = min(len(item_data), max_array_len)
-                pad_seq_data[i, :actual_len] = item_data[:actual_len]
-            pad_seq_data = np.array(pad_seq_data)
-            return torch.from_numpy(pad_seq_data)
-        else:
-            seq_data = np.array([item[k] for item in seq_feature])
-
-            return torch.from_numpy(seq_data)
 
     def __len__(self):
         """
@@ -333,16 +261,6 @@ class MyDataset(torch.utils.data.Dataset):
                 list(self.mm_emb_dict[feat_id].values())[0].shape[0], dtype=np.float32
             )
 
-        self.USER_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['user_sparse']}
-        self.USER_CONTINUAL_FEAT = feat_types['user_continual']
-        self.ITEM_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['item_sparse']}
-        self.ITEM_CONTINUAL_FEAT = feat_types['item_continual']
-        self.USER_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['user_array']}
-        self.ITEM_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['item_array']}
-        # EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}
-        EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 1024}
-        self.ITEM_EMB_FEAT = {k: EMB_SHAPE_DICT[k] for k in feat_types['item_emb']}  # 记录的是不同多模态特征的维度
-
         return feat_default_value, feat_types, feat_statistics
 
     def fill_missing_feat(self, feat, item_id):
@@ -376,19 +294,6 @@ class MyDataset(torch.utils.data.Dataset):
         return filled_feat
 
     @staticmethod
-    def collate_dict_feature(seq_feat):
-        merged_seq = {}
-        for feat in seq_feat:
-            for key in feat:
-                if key not in merged_seq:
-                    merged_seq[key] = []
-                merged_seq[key].append(feat[key])  
-        for key in merged_seq:
-            merged_seq[key] = torch.stack(merged_seq[key])
-        
-        return merged_seq
-        
-    @staticmethod
     def collate_fn(batch):
         """
         Args:
@@ -411,21 +316,11 @@ class MyDataset(torch.utils.data.Dataset):
         token_type = torch.from_numpy(np.array(token_type))
         next_token_type = torch.from_numpy(np.array(next_token_type))
         next_action_type = torch.from_numpy(np.array(next_action_type))
-        seq_feat = MyDataset.collate_dict_feature(seq_feat)
-        pos_feat = MyDataset.collate_dict_feature(pos_feat)
-        neg_feat = MyDataset.collate_dict_feature(neg_feat)
-
+        seq_feat = list(seq_feat)
+        pos_feat = list(pos_feat)
+        neg_feat = list(neg_feat)
         return seq, pos, neg, token_type, next_token_type, next_action_type, seq_feat, pos_feat, neg_feat
 
-    @staticmethod
-    def worker_init_fn(worker_id):
-        worker_info = torch.utils.data.get_worker_info()
-        dataset = worker_info.dataset  # 当前可能是 Subset
-        if hasattr(dataset, 'dataset'):  # 如果是 Subset，则访问原始 dataset
-            dataset = dataset.dataset
-        dataset._init_file_handle()  # 初始化 worker 自己的文件句柄
-
-       
 
 class MyTestDataset(MyDataset):
     """
@@ -508,7 +403,7 @@ class MyTestDataset(MyDataset):
             if record_tuple[2] == 1 and record_tuple[0]:
                 ts.add(record_tuple[0])
 
-        for record_tuple in reversed(ext_user_sequence[:-1]):
+        for record_tuple in reversed(ext_user_sequence):
             i, feat, type_ = record_tuple
             feat = self.fill_missing_feat(feat, i)
             seq[idx] = i
@@ -548,13 +443,9 @@ class MyTestDataset(MyDataset):
         seq, token_type, seq_feat, user_id = zip(*batch)
         seq = torch.from_numpy(np.array(seq))
         token_type = torch.from_numpy(np.array(token_type))
-
-
         seq_feat = list(seq_feat)
 
         return seq, token_type, seq_feat, user_id
-    
-    
 
 
 def save_emb(emb, save_path):
@@ -572,43 +463,6 @@ def save_emb(emb, save_path):
         f.write(struct.pack('II', num_points, num_dimensions))
         emb.tofile(f)
 
-
-# def load_mm_emb(mm_path, feat_ids):
-#     """
-#     加载多模态特征Embedding
-#
-#     Args:
-#         mm_path: 多模态特征Embedding路径
-#         feat_ids: 要加载的多模态特征ID列表
-#
-#     Returns:
-#         mm_emb_dict: 多模态特征Embedding字典，key为特征ID，value为特征Embedding字典（key为item ID，value为Embedding）
-#     """
-#     SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}
-#     mm_emb_dict = {}
-#     for feat_id in tqdm(feat_ids, desc='Loading mm_emb'):
-#         shape = SHAPE_DICT[feat_id]
-#         emb_dict = {}
-#         if feat_id != '81':
-#             try:
-#                 base_path = Path(mm_path, f'emb_{feat_id}_{shape}')
-#                 for json_file in base_path.glob('*.json'):
-#                     with open(json_file, 'r', encoding='utf-8') as file:
-#                         for line in file:
-#                             data_dict_origin = json.loads(line.strip())
-#                             insert_emb = data_dict_origin['emb']
-#                             if isinstance(insert_emb, list):
-#                                 insert_emb = np.array(insert_emb, dtype=np.float32)
-#                             data_dict = {data_dict_origin['anonymous_cid']: insert_emb}
-#                             emb_dict.update(data_dict)
-#             except Exception as e:
-#                 print(f"transfer error: {e}")
-#         if feat_id == '81':
-#             with open(Path(mm_path, f'emb_{feat_id}_{shape}.pkl'), 'rb') as f:
-#                 emb_dict = pickle.load(f)
-#         mm_emb_dict[feat_id] = emb_dict
-#         print(f'Loaded #{feat_id} mm_emb')
-#     return mm_emb_dict
 
 
 def load_mm_emb(mm_path, feat_ids):
