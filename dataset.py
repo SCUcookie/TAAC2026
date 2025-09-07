@@ -1,6 +1,3 @@
-# 全模态生成式推荐系统 - 数据集处理模块
-# 处理用户序列数据、多模态特征和负采样
-
 import json
 import pickle
 import struct
@@ -13,80 +10,55 @@ from tqdm import tqdm
 
 class MyDataset(torch.utils.data.Dataset):
     """
-    训练用的用户序列数据集类
-    负责加载和处理用户历史行为序列，以及各种特征信息
-    
-    数据格式说明：
-    - 用户序列包含用户行为和物品交互的时间序列
-    - 支持多种特征类型：稀疏特征、数组特征、连续特征、多模态embedding特征
-    - 自动进行负采样生成训练样本
-    - 支持动作类型权重（区分曝光和点击）
+    用户序列数据集
 
     Args:
-        data_dir: 训练数据文件目录路径
-        args: 全局参数配置对象
+        data_dir: 数据文件目录
+        args: 全局参数
 
     Attributes:
-        data_dir: 数据文件目录路径
-        maxlen: 用户序列最大长度
-        item_feat_dict: 物品特征字典，key为物品ID，value为特征字典
-        mm_emb_ids: 激活的多模态embedding特征ID列表(如81-86)
-        mm_emb_dict: 多模态特征embedding字典
-        itemnum: 物品总数量
-        usernum: 用户总数量
-        indexer_i_rev: 物品索引反向映射字典 (重编码ID -> 原始物品ID)
-        indexer_u_rev: 用户索引反向映射字典 (重编码ID -> 原始用户ID)
-        indexer: 完整的索引映射字典
-        feature_default_value: 各特征的默认填充值
-        feature_types: 特征类型分组（user/item的sparse/array/emb/continual类型）
-        feat_statistics: 特征统计信息（各特征的取值数量等）
+        data_dir: 数据文件目录
+        maxlen: 最大长度
+        item_feat_dict: 物品特征字典
+        mm_emb_ids: 激活的mm_emb特征ID
+        mm_emb_dict: 多模态特征字典
+        itemnum: 物品数量
+        usernum: 用户数量
+        indexer_i_rev: 物品索引字典 (reid -> item_id)
+        indexer_u_rev: 用户索引字典 (reid -> user_id)
+        indexer: 索引字典
+        feature_default_value: 特征缺省值
+        feature_types: 特征类型，分为user和item的sparse, array, emb, continual类型
+        feat_statistics: 特征统计信息，包括user和item的特征数量
     """
 
     def __init__(self, data_dir, args):
         """
-        初始化训练数据集
-        加载用户序列数据、物品特征、多模态embedding等所有必要信息
-        
-        Args:
-            data_dir: 训练数据目录路径
-            args: 包含maxlen、mm_emb_id等参数的配置对象
+        初始化数据集
         """
         super().__init__()
         self.data_dir = Path(data_dir)
-        self._load_data_and_offsets()  # 加载用户序列数据和文件偏移量
-        self.maxlen = args.maxlen  # 用户序列最大长度
-        self.mm_emb_ids = args.mm_emb_id  # 激活的多模态特征ID列表
+        self._load_data_and_offsets()
+        self.maxlen = args.maxlen
+        self.mm_emb_ids = args.mm_emb_id
 
-        # 加载物品特征字典：包含所有物品的各种特征信息
         self.item_feat_dict = json.load(open(Path(data_dir, "item_feat_dict.json"), 'r'))
-        
-        # 加载多模态特征embedding（如图像、文本特征的预训练向量）
         self.mm_emb_dict = load_mm_emb(Path(data_dir, "creative_emb"), self.mm_emb_ids)
-        
-        # 加载索引映射字典：用于原始ID和重编码ID之间的转换
         with open(self.data_dir / 'indexer.pkl', 'rb') as ff:
             indexer = pickle.load(ff)
-            self.itemnum = len(indexer['i'])  # 物品数量
-            self.usernum = len(indexer['u'])  # 用户数量
-            
-        # 创建反向索引：从重编码ID映射回原始ID
+            self.itemnum = len(indexer['i'])
+            self.usernum = len(indexer['u'])
         self.indexer_i_rev = {v: k for k, v in indexer['i'].items()}
         self.indexer_u_rev = {v: k for k, v in indexer['u'].items()}
         self.indexer = indexer
 
-        # 初始化特征相关信息：默认值、类型分组、统计信息
         self.feature_default_value, self.feature_types, self.feat_statistics = self._init_feat_info()
 
     def _load_data_and_offsets(self):
         """
-        加载用户序列数据文件和每一行的文件偏移量（预处理好的）
-        使用文件偏移量可以实现快速的随机访问，避免将所有数据加载到内存中
-        这对于大规模数据集非常重要，可以节省内存并提高I/O效率
+        加载用户序列数据和每一行的文件偏移量(预处理好的), 用于快速随机访问数据并I/O
         """
-        # 打开用户序列数据文件（二进制模式以提高读取速度）
         self.data_file = open(self.data_dir / "seq.jsonl", 'rb')
-        
-        # 加载预处理好的文件偏移量，用于快速定位每个用户的数据
         with open(Path(self.data_dir, 'seq_offsets.pkl'), 'rb') as f:
             self.seq_offsets = pickle.load(f)
 

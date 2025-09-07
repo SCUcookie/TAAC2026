@@ -44,7 +44,7 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     # 训练基础参数
-    parser.add_argument('--batch_size', default=256, type=int, help='训练批次大小')
+    parser.add_argument('--batch_size', default=128, type=int, help='训练批次大小')
     parser.add_argument('--lr', default=0.002, type=float, help='学习率')
     parser.add_argument('--maxlen', default=101, type=int, help='用户序列最大长度')
 
@@ -108,7 +108,7 @@ if __name__ == '__main__':
     # 创建训练数据集和数据加载器
     dataset = MyDataset(data_path, args)
     train_loader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn
+        dataset, batch_size=args.batch_size, shuffle=True, num_workers=0, collate_fn=dataset.collate_fn
     )
     usernum, itemnum = dataset.usernum, dataset.itemnum  # 获取用户和物品数量
     feat_statistics, feat_types = dataset.feat_statistics, dataset.feature_types  # 获取特征统计信息
@@ -173,7 +173,6 @@ if __name__ == '__main__':
         for step, batch in tqdm(enumerate(train_loader), total=len(train_loader)):
             # 解包batch数据
             seq, pos, neg, token_type, next_token_type, next_action_type, seq_feat, pos_feat, neg_feat = batch
-            
             # 将数据移动到指定设备
             seq = seq.to(args.device)  # 用户序列ID
             pos = pos.to(args.device)  # 正样本ID
