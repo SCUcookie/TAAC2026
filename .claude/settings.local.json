@@ -10,7 +10,10 @@
       "Bash(set TRAIN_DATA_PATH=./dataset/TencentGR_1k)",
       "Bash(set TRAIN_CKPT_PATH=./ckpt)",
       "Bash(bash:*)",
-      "Bash(dir /b explore_dataset1m_real_datasetresult)"
+      "Bash(dir /b explore_dataset1m_real_datasetresult)",
+      "Bash(dir:*)",
+      "Bash(tree:*)",
+      "Bash(if exist temp_test_data rmdir /s /q temp_test_data)"
     ],
     "deny": [],
     "ask": []
