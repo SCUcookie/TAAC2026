@@ -1,6 +1,5 @@
-import math
 from pathlib import Path
-import torch.nn as nn
+
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -8,95 +7,6 @@ from tqdm import tqdm
 
 from dataset import save_emb
 
-
-class RotaryEmbedding(torch.nn.Module):
-    def __init__(self, head_dim, base=10000):
-        super().__init__()
-        assert head_dim % 2 == 0, "head_dim must be even for RoPE"
-        self.head_dim = head_dim
-        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-    def get_cos_sin(self, positions, dtype, device):
-        # positions: [s] 或 [b, s]
-        if positions.dim() == 1:
-            angles = positions[:, None].to(device).float() * self.inv_freq[None, :]
-            cos = angles.cos().to(dtype)[None, None, :, :]  # [1,1,s,d/2]
-            sin = angles.sin().to(dtype)[None, None, :, :]
-        else:
-            angles = positions[..., None].to(device).float() * self.inv_freq[None, None, :]
-            cos = angles.cos().to(dtype)[:, None, :, :]     # [b,1,s,d/2]
-            sin = angles.sin().to(dtype)[:, None, :, :]
-        return cos, sin
-
-    @staticmethod
-    def apply_rotary(x, cos, sin):
-        # x: [b, n, s, d]
-        x1 = x[..., 0::2]
-        x2 = x[..., 1::2]
-        rotated_x1 = x1 * cos - x2 * sin
-        rotated_x2 = x1 * sin + x2 * cos
-        out = torch.empty_like(x)
-        out[..., 0::2] = rotated_x1
-        out[..., 1::2] = rotated_x2
-        return out
-
-
-class SENet(nn.Module):
-    def __init__(self, num_features, feature_dim, reduction_ratio=4):
-
-        super(SENet, self).__init__()
-        self.num_features = num_features
-        self.feature_dim = feature_dim
-
-        # Squeeze操作: 全局平均池化
-        self.squeeze = nn.AdaptiveAvgPool1d(1)
-
-        # Excitation操作
-        self.excitation = nn.Sequential(
-            nn.Linear(num_features, num_features // reduction_ratio, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(num_features // reduction_ratio, num_features, bias=False),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        """
-        Args:
-            x: 输入特征 [batch_size, seq_len, num_features, feature_dim]
-        Returns:
-            加权后的特征 [batch_size, seq_len, num_features, feature_dim]
-        """
-        batch_size, seq_len, num_features, feature_dim = x.size()
-
-        # 1. 调整形状以适应 squeeze 操作 [batch_size * seq_len, num_features, feature_dim]
-        x_reshaped = x.view(-1, num_features, feature_dim)
-
-        # 2. Squeeze: 对每个特征进行全局平均池化 [batch_size * seq_len, num_features, 1]
-        squeezed = self.squeeze(x_reshaped)
-
-        # 3. Excitation: 计算注意力权重 [batch_size * seq_len, num_features]
-        squeezed = squeezed.view(-1, self.num_features)
-        weights = self.excitation(squeezed)
-        weights = weights.view(-1, self.num_features, 1)
-
-        # 4. 特征加权 [batch_size * seq_len, num_features, feature_dim]
-        weighted_features = x_reshaped * weights.expand_as(x_reshaped)
-
-        # 5. 恢复原始形状 [batch_size, seq_len, num_features, feature_dim]
-        weighted_features = weighted_features.view(batch_size, seq_len, num_features, feature_dim)
-
-        return weighted_features
-
-def truncated_normal(x: torch.Tensor, mean: float, std: float) -> torch.Tensor:
-    with torch.no_grad():
-        size = x.shape
-        tmp = x.new_empty(size + (4,)).normal_()
-        valid = (tmp < 2) & (tmp > -2)
-        ind = valid.max(-1, keepdim=True)[1]
-        x.data.copy_(tmp.gather(-1, ind).squeeze(-1))
-        x.data.mul_(std).add_(mean)
-        return x
 
 class FlashMultiHeadAttention(torch.nn.Module):
     def __init__(self, hidden_units, num_heads, dropout_rate):
@@ -106,15 +16,12 @@ class FlashMultiHeadAttention(torch.nn.Module):
         self.num_heads = num_heads
         self.head_dim = hidden_units // num_heads
         self.dropout_rate = dropout_rate
-        self._eps = 1e-6
+
         assert hidden_units % num_heads == 0, "hidden_units must be divisible by num_heads"
 
-
-        self.rope = RotaryEmbedding(self.head_dim)
         self.q_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.k_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.v_linear = torch.nn.Linear(hidden_units, hidden_units)
-        self.u_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.out_linear = torch.nn.Linear(hidden_units, hidden_units)
 
     def forward(self, query, key, value, attn_mask=None):
@@ -124,39 +31,33 @@ class FlashMultiHeadAttention(torch.nn.Module):
         Q = self.q_linear(query)
         K = self.k_linear(key)
         V = self.v_linear(value)
-        U = self.u_linear(value)
-
-
 
         # reshape为multi-head格式
         Q = Q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
-        maxlen = query.shape[1]
-        poss = torch.arange(1, maxlen + 1, device=Q.device).unsqueeze(0).expand(batch_size, -1).clone()
-        cos, sin = self.rope.get_cos_sin(poss, dtype=Q.dtype, device=Q.device)
-        Q = self.rope.apply_rotary(Q, cos, sin)
-        K = self.rope.apply_rotary(K, cos, sin)
+        if hasattr(F, 'scaled_dot_product_attention'):
+            # PyTorch 2.0+ 使用内置的Flash Attention
+            attn_output = F.scaled_dot_product_attention(
+                Q, K, V, dropout_p=self.dropout_rate if self.training else 0.0, attn_mask=attn_mask.unsqueeze(1)
+            )
+        else:
+            # 降级到标准注意力机制
+            scale = (self.head_dim) ** -0.5
+            scores = torch.matmul(Q, K.transpose(-2, -1)) * scale
 
+            if attn_mask is not None:
+                scores.masked_fill_(attn_mask.unsqueeze(1).logical_not(), float('-inf'))
 
-
-        scores = torch.matmul(Q, K.transpose(-2, -1))
-        scores = F.silu(scores) / seq_len
-        scores = scores * attn_mask.unsqueeze(1)
-
-        attn_weights = F.dropout(scores, p=self.dropout_rate, training=self.training)
-        attn_output = torch.matmul(attn_weights, V)
+            attn_weights = F.softmax(scores, dim=-1)
+            attn_weights = F.dropout(attn_weights, p=self.dropout_rate, training=self.training)
+            attn_output = torch.matmul(attn_weights, V)
 
         # reshape回原来的格式
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, self.hidden_units)
 
-        attn_output = F.layer_norm(
-            attn_output, normalized_shape=[self.hidden_units], eps=self._eps
-        )
-        # 乘以u矩阵，开启门控网络
-
-        attn_output = U * attn_output
+        # 最终的线性变换
         output = self.out_linear(attn_output)
 
         return output, None
@@ -209,19 +110,12 @@ class BaselineModel(torch.nn.Module):
         self.dev = args.device
         self.norm_first = args.norm_first
         self.maxlen = args.maxlen
-        self.embedding_dim = args.hidden_units
-
-        # InfoNCE 相关参数
-        self.temp = max(getattr(args, 'temp', 0.07), 0.01)  # 确保温度系数大于0
-        self.loss_type = getattr(args, 'loss_type', 'bce')
-        self.neg_topk = max(getattr(args, 'neg_topk', 0), 0)  # 确保非负
-        self.norm_output = getattr(args, 'norm_output', False)
         # TODO: loss += args.l2_emb for regularizing embedding vectors during training
         # https://stackoverflow.com/questions/42704283/adding-l1-l2-regularization-in-pytorch
 
         self.item_emb = torch.nn.Embedding(self.item_num + 1, args.hidden_units, padding_idx=0)
         self.user_emb = torch.nn.Embedding(self.user_num + 1, args.hidden_units, padding_idx=0)
-
+        self.pos_emb = torch.nn.Embedding(2 * args.maxlen + 1, args.hidden_units, padding_idx=0)
         self.emb_dropout = torch.nn.Dropout(p=args.dropout_rate)
         self.sparse_emb = torch.nn.ModuleDict()
         self.emb_transform = torch.nn.ModuleDict()
@@ -237,19 +131,10 @@ class BaselineModel(torch.nn.Module):
             self.USER_CONTINUAL_FEAT
         )
         itemdim = (
-                args.hidden_units * (len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) - 2)
-                + len(self.ITEM_CONTINUAL_FEAT)
-                + args.hidden_units * len(self.ITEM_EMB_FEAT)
+            args.hidden_units * (len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT))
+            + len(self.ITEM_CONTINUAL_FEAT)
+            + args.hidden_units * len(self.ITEM_EMB_FEAT)
         )
-
-
-        user_feature_num = (len(self.USER_SPARSE_FEAT) + 1 + len(self.USER_ARRAY_FEAT)) + len(
-            self.USER_CONTINUAL_FEAT
-        )
-        item_feature_num = len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) - 2 + len(self.ITEM_CONTINUAL_FEAT) + len(self.ITEM_EMB_FEAT)
-
-        self.item_senet = SENet(item_feature_num, args.hidden_units)
-        self.user_senet = SENet(user_feature_num, args.hidden_units)
 
         self.userdnn = torch.nn.Linear(userdim, args.hidden_units)
         self.itemdnn = torch.nn.Linear(itemdim, args.hidden_units)
@@ -274,10 +159,6 @@ class BaselineModel(torch.nn.Module):
         for k in self.USER_SPARSE_FEAT:
             self.sparse_emb[k] = torch.nn.Embedding(self.USER_SPARSE_FEAT[k] + 1, args.hidden_units, padding_idx=0)
         for k in self.ITEM_SPARSE_FEAT:
-            if(k=='111'):
-                continue
-            if(k=='115'):
-                continue
             self.sparse_emb[k] = torch.nn.Embedding(self.ITEM_SPARSE_FEAT[k] + 1, args.hidden_units, padding_idx=0)
         for k in self.ITEM_ARRAY_FEAT:
             self.sparse_emb[k] = torch.nn.Embedding(self.ITEM_ARRAY_FEAT[k] + 1, args.hidden_units, padding_idx=0)
@@ -285,42 +166,6 @@ class BaselineModel(torch.nn.Module):
             self.sparse_emb[k] = torch.nn.Embedding(self.USER_ARRAY_FEAT[k] + 1, args.hidden_units, padding_idx=0)
         for k in self.ITEM_EMB_FEAT:
             self.emb_transform[k] = torch.nn.Linear(self.ITEM_EMB_FEAT[k], args.hidden_units)
-
-        self.reset_embeddings()
-
-    def reset_embeddings(self) -> None:
-        for name, params in self.named_parameters():
-            if "item_emb" in name:
-                self.item_emb.weight.data.zero_()
-                self.item_emb.weight.data[0] = 0
-                print(
-                    f"Initialize {name} as zero normal: {params.data.size()} params"
-                )
-                continue
-            if "user_emb" in name:
-                self.user_emb.weight.data.zero_()
-                self.user_emb.weight.data[0] = 0
-                print(
-                    f"Initialize {name} as zero normal: {params.data.size()} params"
-                )
-                continue
-            if "pos_emb" in name:
-                truncated_normal(
-                    self.pos_emb.weight.data,
-                    mean=0.0,
-                    std=math.sqrt(1.0 / self.embedding_dim),
-                )
-                print(
-                    f"Initialize {name} as math sqrt normal: {params.data.size()} params"
-                )
-                continue
-            if "_emb" in name:
-                print(
-                    f"Initialize {name} as truncated normal: {params.data.size()} params"
-                )
-                truncated_normal(params, mean=0.0, std=0.02)
-            else:
-                print(f"Skipping initializing params {name} - not configured")
 
     def _init_feat_info(self, feat_statistics, feat_types):
         """
@@ -336,8 +181,7 @@ class BaselineModel(torch.nn.Module):
         self.ITEM_CONTINUAL_FEAT = feat_types['item_continual']
         self.USER_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['user_array']}
         self.ITEM_ARRAY_FEAT = {k: feat_statistics[k] for k in feat_types['item_array']}
-        # EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}
-        EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 1024}
+        EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}
         self.ITEM_EMB_FEAT = {k: EMB_SHAPE_DICT[k] for k in feat_types['item_emb']}  # 记录的是不同多模态特征的维度
 
     def feat2tensor(self, seq_feature, k):
@@ -394,20 +238,10 @@ class BaselineModel(torch.nn.Module):
         seq = seq.to(self.dev)
         # pre-compute embedding
         if include_user:
-            # 确保mask在正确的设备上并且维度匹配
-            mask = mask.to(self.dev)
-            # 检查mask的值是否在合理范围内
-            mask = torch.clamp(mask, 0, 2)  # 确保mask值在0-2范围内
-
-            user_mask = (mask == 2)
-            item_mask = (mask == 1)
-
-            # 安全的掩码操作
-            user_seq = torch.where(user_mask, seq, torch.zeros_like(seq))
-            item_seq = torch.where(item_mask, seq, torch.zeros_like(seq))
-
-            user_embedding = self.user_emb(user_seq)
-            item_embedding = self.item_emb(item_seq)
+            user_mask = (mask == 2).to(self.dev)
+            item_mask = (mask == 1).to(self.dev)
+            user_embedding = self.user_emb(user_mask * seq)
+            item_embedding = self.item_emb(item_mask * seq)
             item_feat_list = [item_embedding]
             user_feat_list = [user_embedding]
         else:
@@ -436,12 +270,8 @@ class BaselineModel(torch.nn.Module):
                 continue
 
             for k in feat_dict:
-                if(k=='111'):
-                    continue
-                if(k=='115'):
-                    continue
-                tensor_feature = feature_array[k]
-                tensor_feature = tensor_feature.to(self.dev)
+                tensor_feature = self.feat2tensor(feature_array, k)
+
                 if feat_type.endswith('sparse'):
                     feat_list.append(self.sparse_emb[k](tensor_feature))
                 elif feat_type.endswith('array'):
@@ -450,25 +280,32 @@ class BaselineModel(torch.nn.Module):
                     feat_list.append(tensor_feature.unsqueeze(2))
 
         for k in self.ITEM_EMB_FEAT:
-            batch_emb_data = feature_array[k]
-            tensor_feature = batch_emb_data.to(self.dev)
+            # collect all data to numpy, then batch-convert
+            batch_size = len(feature_array)
+            emb_dim = self.ITEM_EMB_FEAT[k]
+            seq_len = len(feature_array[0])
+
+            # pre-allocate tensor
+            batch_emb_data = np.zeros((batch_size, seq_len, emb_dim), dtype=np.float32)
+
+            for i, seq in enumerate(feature_array):
+                for j, item in enumerate(seq):
+                    if k in item:
+                        batch_emb_data[i, j] = item[k]
+
+            # batch-convert and transfer to GPU
+            tensor_feature = torch.from_numpy(batch_emb_data).to(self.dev)
             item_feat_list.append(self.emb_transform[k](tensor_feature))
 
         # merge features
-        b, s = seq.size(0), seq.size(1)
-        item_feats = torch.stack(item_feat_list, dim=2)
-        item_feats = self.item_senet(item_feats)
-        all_item_emb = item_feats.view(b, s, -1)
-        all_item_emb = self.itemdnn(all_item_emb)
+        all_item_emb = torch.cat(item_feat_list, dim=2)
+        all_item_emb = torch.relu(self.itemdnn(all_item_emb))
         if include_user:
-            user_feats = torch.stack(user_feat_list, dim=2)
-            user_feats = self.user_senet(user_feats)
-            all_user_emb = user_feats.view(b, s, -1)
-            all_user_emb = self.userdnn(all_user_emb)
+            all_user_emb = torch.cat(user_feat_list, dim=2)
+            all_user_emb = torch.relu(self.userdnn(all_user_emb))
             seqs_emb = all_item_emb + all_user_emb
         else:
             seqs_emb = all_item_emb
-
         return seqs_emb
 
     def log2feats(self, log_seqs, mask, seq_feature):
@@ -485,7 +322,9 @@ class BaselineModel(torch.nn.Module):
         maxlen = log_seqs.shape[1]
         seqs = self.feat2emb(log_seqs, seq_feature, mask=mask, include_user=True)
         seqs *= self.item_emb.embedding_dim**0.5
-
+        poss = torch.arange(1, maxlen + 1, device=self.dev).unsqueeze(0).expand(batch_size, -1).clone()
+        poss *= log_seqs != 0
+        seqs += self.pos_emb(poss)
         seqs = self.emb_dropout(seqs)
 
         maxlen = seqs.shape[1]
@@ -510,7 +349,7 @@ class BaselineModel(torch.nn.Module):
         return log_feats
 
     def forward(
-            self, user_item, pos_seqs, neg_seqs, mask, next_mask, next_action_type, seq_feature, pos_feature, neg_feature
+        self, user_item, pos_seqs, neg_seqs, mask, next_mask, next_action_type, seq_feature, pos_feature, neg_feature
     ):
         """
         训练时调用，计算正负样本的logits
@@ -557,10 +396,6 @@ class BaselineModel(torch.nn.Module):
 
         final_feat = log_feats[:, -1, :]
 
-        # 如果启用了输出归一化，对最终特征进行L2归一化
-        if self.norm_output:
-            final_feat = F.normalize(final_feat, p=2, dim=-1)
-
         return final_feat
 
     def save_item_emb(self, item_ids, retrieval_ids, feat_dict, save_path, batch_size=1024):
@@ -593,57 +428,5 @@ class BaselineModel(torch.nn.Module):
         # 合并所有批次的结果并保存
         final_ids = np.array(retrieval_ids, dtype=np.uint64).reshape(-1, 1)
         final_embs = np.concatenate(all_embs, axis=0)
-
-        # 如果启用了输出归一化，对embedding进行L2归一化
-        if self.norm_output:
-            final_embs = final_embs / (np.linalg.norm(final_embs, axis=1, keepdims=True) + 1e-8)
-
         save_emb(final_embs, Path(save_path, 'embedding.fbin'))
         save_emb(final_ids, Path(save_path, 'id.u64bin'))
-
-    def compute_infonce_loss(self, seq_embs, pos_embs, neg_embs, loss_mask):
-        """
-        计算InfoNCE对比学习损失
-        
-        Args:
-            seq_embs: 序列embedding [batch_size, maxlen, hidden_units]
-            pos_embs: 正样本embedding [batch_size, maxlen, hidden_units] 
-            neg_embs: 负样本embedding [batch_size, maxlen, hidden_units]
-            loss_mask: 损失掩码 [batch_size, maxlen]
-            
-        Returns:
-            loss: InfoNCE损失值
-        """
-        # 对embedding进行L2归一化
-        seq_embs = F.normalize(seq_embs, p=2, dim=-1)
-        pos_embs = F.normalize(pos_embs, p=2, dim=-1)
-        neg_embs = F.normalize(neg_embs, p=2, dim=-1)
-
-
-        # 只使用有效位置的embedding来减少计算量
-        valid_seq_embs = seq_embs[loss_mask]  # [num_valid, hidden_size]
-        valid_pos_embs = pos_embs[loss_mask]  # [num_valid, hidden_size]
-        valid_neg_embs = neg_embs[loss_mask]  # [num_valid, hidden_size]
-
-        if valid_seq_embs.size(0) == 0:
-            return torch.tensor(0.0, device=seq_embs.device, requires_grad=True)
-
-        # 计算正样本logits（只保留有效位置）
-        valid_pos_logits = F.cosine_similarity(valid_seq_embs, valid_pos_embs, dim=-1).unsqueeze(-1)  # [num_valid, 1]
-
-
-        # 计算负样本相似度（只在有效位置之间）
-        neg_logits = torch.matmul(valid_seq_embs, valid_neg_embs.transpose(-1, -2))  # [num_valid, num_valid]
-
-
-        logits = torch.cat([valid_pos_logits, neg_logits], dim=-1)
-        # 应用温度系数
-        logits = logits / self.temp
-
-        # 创建标签，正样本位置为0
-        labels = torch.zeros(logits.size(0), device=logits.device, dtype=torch.int64)
-
-        # 计算交叉熵损失
-        loss = F.cross_entropy(logits, labels)
-
-        return loss, valid_pos_logits.mean().item(), neg_logits.mean().item()
