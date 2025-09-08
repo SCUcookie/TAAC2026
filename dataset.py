@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from tqdm import tqdm
+from time_features import get_time_feature_extractor
 
 
 class MyDataset(torch.utils.data.Dataset):
@@ -179,6 +180,15 @@ class MyDataset(torch.utils.data.Dataset):
         """
         user_sequence = self._load_user_data(uid)  # 动态加载用户数据
 
+        # 添加时间特征处理
+        if user_sequence and len(user_sequence) > 0:
+            extractor = get_time_feature_extractor()
+            try:
+                ts_array, user_sequence = extractor.add_time_features(user_sequence)
+            except Exception as e:
+                # 如果时间特征处理失败，使用原序列
+                pass
+
         ext_user_sequence = []
         for record_tuple in user_sequence:
             u, i, user_feat, item_feat, action_type, _ = record_tuple
@@ -210,6 +220,14 @@ class MyDataset(torch.utils.data.Dataset):
         for record_tuple in reversed(ext_user_sequence[:-1]):
             i, feat, type_, act_type = record_tuple
             next_i, next_feat, next_type, next_act_type = nxt
+            
+            # 如果当前是user特征，且下一个token是item，需要将时间特征从user_feat传输到item_feat
+            if type_ == 2 and next_type == 1:  # 当前是user，下一个是item
+                extractor = get_time_feature_extractor()
+                next_feat = extractor.transfer_context_features(
+                    feat, next_feat, ["200", "201", "203", "204", "205"]
+                )
+            
             feat = self.fill_missing_feat(feat, i)
             next_feat = self.fill_missing_feat(next_feat, next_i)
             seq[idx] = i
@@ -310,7 +328,7 @@ class MyDataset(torch.utils.data.Dataset):
         feat_default_value = {}
         feat_statistics = {}
         feat_types = {}
-        feat_types['user_sparse'] = ['103', '104', '105', '109']
+        feat_types['user_sparse'] = ['103', '104', '105', '109', '200', '201', '203', '204', '205']
         feat_types['item_sparse'] = [
             '100',
             '117',
@@ -335,7 +353,20 @@ class MyDataset(torch.utils.data.Dataset):
 
         for feat_id in feat_types['user_sparse']:
             feat_default_value[feat_id] = 0
-            feat_statistics[feat_id] = len(self.indexer['f'][feat_id])
+            # 时间特征不在索引器中，需要特殊处理
+            if feat_id in ['200', '201', '203', '204', '205']:  # 时间相关稀疏特征
+                if feat_id == '200':  # 小时 (0-23)
+                    feat_statistics[feat_id] = 24
+                elif feat_id == '201':  # 星期 (0-6)  
+                    feat_statistics[feat_id] = 7
+                elif feat_id == '203':  # 对数间隔离散化 (0-99)
+                    feat_statistics[feat_id] = 100  
+                elif feat_id == '204':  # 月份 (1-12)
+                    feat_statistics[feat_id] = 12
+                elif feat_id == '205':  # 时间衰减离散化 (0-99)
+                    feat_statistics[feat_id] = 100
+            else:
+                feat_statistics[feat_id] = len(self.indexer['f'][feat_id])
         for feat_id in feat_types['item_sparse']:
             feat_default_value[feat_id] = 0
             feat_statistics[feat_id] = len(self.indexer['f'][feat_id])
@@ -500,6 +531,15 @@ class MyTestDataset(MyDataset):
         """
         user_sequence = self._load_user_data(uid)  # 动态加载用户数据
 
+        # 添加时间特征处理 (与训练保持一致)
+        if user_sequence and len(user_sequence) > 0:
+            extractor = get_time_feature_extractor()
+            try:
+                ts_array, user_sequence = extractor.add_time_features(user_sequence)
+            except Exception as e:
+                # 如果时间特征处理失败，使用原序列
+                pass
+
         ext_user_sequence = []
         for record_tuple in user_sequence:
             u, i, user_feat, item_feat, _, _ = record_tuple
@@ -534,8 +574,18 @@ class MyTestDataset(MyDataset):
             if record_tuple[2] == 1 and record_tuple[0]:
                 ts.add(record_tuple[0])
 
-        for record_tuple in reversed(ext_user_sequence[:-1]):
+        for idx_ext, record_tuple in enumerate(reversed(ext_user_sequence)):
             i, feat, type_ = record_tuple
+            
+            # 如果当前是item，检查前一个是否是user，需要传输时间特征
+            if type_ == 1 and idx_ext > 0:
+                prev_record = list(reversed(ext_user_sequence[:-1]))[idx_ext - 1]
+                if len(prev_record) > 2 and prev_record[2] == 2:  # 前一个是user
+                    extractor = get_time_feature_extractor()
+                    feat = extractor.transfer_context_features(
+                        prev_record[1], feat, ["200", "201", "203", "204", "205"]
+                    )
+            
             feat = self.fill_missing_feat(feat, i)
             seq[idx] = i
             token_type[idx] = type_
