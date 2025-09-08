@@ -582,11 +582,74 @@ class BaselineModel(torch.nn.Module):
             item_seq = torch.tensor(item_ids[start_idx:end_idx], device=self.dev).unsqueeze(0)
             batch_feat_list = []
             for i in range(start_idx, end_idx):
-                batch_feat.append(feat_dict[i])
+                batch_feat_list.append(feat_dict[i])
 
-            batch_feat = np.array(batch_feat, dtype=object)
+            # 关键修复：将 list of dicts 转换为 dict of tensors
+            feature_array = {}
+            
+            # 获取所有可能的特征ID
+            all_feat_ids = set()
+            for feat in batch_feat_list:
+                all_feat_ids.update(feat.keys())
+            
+            # 为每个特征ID创建tensor
+            for feat_id in all_feat_ids:
+                if feat_id in self.ITEM_SPARSE_FEAT or feat_id in self.USER_SPARSE_FEAT:
+                    # 稀疏特征处理
+                    feat_values = []
+                    for feat in batch_feat_list:
+                        if feat_id in feat:
+                            feat_values.append(feat[feat_id])
+                        else:
+                            feat_values.append(0)  # 默认值
+                    feature_array[feat_id] = torch.tensor(feat_values, device=self.dev).unsqueeze(0)
+                    
+                elif feat_id in self.ITEM_ARRAY_FEAT or feat_id in self.USER_ARRAY_FEAT:
+                    # 数组特征处理
+                    feat_arrays = []
+                    max_len = 0
+                    for feat in batch_feat_list:
+                        if feat_id in feat:
+                            feat_arrays.append(feat[feat_id])
+                            max_len = max(max_len, len(feat[feat_id]))
+                        else:
+                            feat_arrays.append([])
+                    
+                    # Padding到相同长度
+                    padded_arrays = []
+                    for arr in feat_arrays:
+                        if len(arr) < max_len:
+                            padded_arr = arr + [0] * (max_len - len(arr))
+                        else:
+                            padded_arr = arr[:max_len]
+                        padded_arrays.append(padded_arr)
+                    
+                    feature_array[feat_id] = torch.tensor(padded_arrays, device=self.dev).unsqueeze(0)
+                    
+                elif feat_id in self.ITEM_CONTINUAL_FEAT or feat_id in self.USER_CONTINUAL_FEAT:
+                    # 连续特征处理
+                    feat_values = []
+                    for feat in batch_feat_list:
+                        if feat_id in feat:
+                            feat_values.append(feat[feat_id])
+                        else:
+                            feat_values.append(0.0)  # 默认值
+                    feature_array[feat_id] = torch.tensor(feat_values, device=self.dev, dtype=torch.float32).unsqueeze(0)
+                    
+                elif feat_id in self.ITEM_EMB_FEAT:
+                    # 嵌入特征处理
+                    feat_embeddings = []
+                    for feat in batch_feat_list:
+                        if feat_id in feat:
+                            feat_embeddings.append(feat[feat_id])
+                        else:
+                            # 使用零填充，维度从 ITEM_EMB_FEAT 获取
+                            emb_dim = self.ITEM_EMB_FEAT[feat_id]
+                            feat_embeddings.append(np.zeros(emb_dim, dtype=np.float32))
+                    
+                    feature_array[feat_id] = torch.tensor(np.array(feat_embeddings), device=self.dev).unsqueeze(0)
 
-            batch_emb = self.feat2emb(item_seq, [batch_feat], include_user=False).squeeze(0)
+            batch_emb = self.feat2emb(item_seq, feature_array, include_user=False).squeeze(0)
 
             all_embs.append(batch_emb.detach().cpu().numpy().astype(np.float32))
 
