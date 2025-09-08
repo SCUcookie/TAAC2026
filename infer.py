@@ -365,4 +365,4 @@ def infer():
     return top10s, user_list
 
 if __name__ == "__main__":
-    infer()
+    print(infer())
