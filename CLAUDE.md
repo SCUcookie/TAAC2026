@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **全模态生成式推荐（All-Modality Generative Recommendation）**
 
 参赛者需基于**脱敏**的用户历史行为序列，综合**协同、文本、视觉等多模态**信息，预测用户**下一次可能交互的广告**。每条行为包含广告 ID 类特征与多模态信息（如图像、文本等）。大赛提供基线模型，并在方案评审环节引导选手**突破传统判别式推荐框架**，探索**生成式推荐**方向。
-注意比赛环境是linux，修改评测数据相关的代码时不用运行脚本测试，因为评测数据集仅在比赛服务器上，比赛服务器的内存大小是50GB，显存大小是40GB，代码的流程详细分析在 腾讯算法大赛训练和推理流程详细分析.md 中。
+注意比赛环境是linux，修改评测数据相关的代码时不用运行脚本测试，因为评测数据集仅在比赛服务器上，比赛服务器的内存大小是50GB，显存大小是40GB，评价指标Score = 0.31*HitRate@10+0.69*NDCG@10。
 
 训练时数据集类是dataset.py中的MyDataset，训练时数据集类是dataset.py中的MyTestDataset
 
