@@ -1,1 +1,7 @@
-./dataset/
+cache/*
+ckpt/*
+dataset/*
+eval_cache/*
+logs/*
+tf_events/*
+.idea/*
