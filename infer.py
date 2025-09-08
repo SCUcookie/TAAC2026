@@ -75,6 +75,102 @@ def get_args():
 
     return args
 
+def read_fbin_file(filepath):
+    """读取.fbin格式的向量文件"""
+    with open(filepath, 'rb') as f:
+        # 读取文件头：向量数量和维度
+        num_vectors, dimensions = struct.unpack('II', f.read(8))
+        # 读取向量数据
+        vectors = np.fromfile(f, dtype=np.float32).reshape(num_vectors, dimensions)
+    return vectors, num_vectors, dimensions
+
+
+def read_u64bin_file(filepath):
+    """读取.u64bin格式的ID文件"""
+    with open(filepath, 'rb') as f:
+        # 读取文件头：ID数量和每个ID的维度(通常为1)
+        num_ids, id_dim = struct.unpack('II', f.read(8))
+        # 读取ID数据
+        ids = np.fromfile(f, dtype=np.uint64).reshape(num_ids, id_dim)
+    return ids.flatten()  # 返回一维数组
+
+
+def write_u64bin_file(ids, filepath):
+    """写入.u64bin格式的ID文件"""
+    ids = ids.astype(np.uint64)
+    num_ids = len(ids)
+    with open(filepath, 'wb') as f:
+        # 写入文件头
+        f.write(struct.pack('II', num_ids, 1))
+        # 写入ID数据
+        ids.tofile(f)
+
+
+def perform_python_faiss_search():
+    """使用Python FAISS执行ANN搜索，替代命令行工具"""
+
+    if not FAISS_AVAILABLE:
+        raise ImportError("FAISS not available, cannot use Python FAISS mode")
+
+    print("Performing ANN search with Python FAISS...")
+
+    # 文件路径
+    eval_result_path = os.environ.get("EVAL_RESULT_PATH")
+    dataset_vector_path = Path(eval_result_path, "embedding.fbin")
+    dataset_id_path = Path(eval_result_path, "id.u64bin")
+    query_vector_path = Path(eval_result_path, "query.fbin")
+    result_id_path = Path(eval_result_path, "id100.u64bin")
+
+    # 读取候选库向量和ID
+    print("Loading dataset vectors...")
+    dataset_vectors, num_dataset, vector_dim = read_fbin_file(dataset_vector_path)
+    dataset_ids = read_u64bin_file(dataset_id_path)
+
+    # 读取查询向量
+    print("Loading query vectors...")
+    query_vectors, num_queries, _ = read_fbin_file(query_vector_path)
+
+    # 构建FAISS索引 (HNSW + 内积)
+    print("Building FAISS HNSW index...")
+    # 使用IndexHNSWFlat，内积相似度
+    index = faiss.IndexHNSWFlat(vector_dim, 64)  # M=64
+    index.hnsw.efConstruction = 1280  # ef_construction=1280
+    index.metric_type = faiss.METRIC_INNER_PRODUCT  # 内积相似度
+
+    # 添加向量到索引
+    index.add(dataset_vectors)
+
+    # 设置查询参数
+    index.hnsw.efSearch = 640  # ef_search=640
+
+    # 执行搜索
+    print("Performing search...")
+    k = 10  # top-k=10
+    similarities, indices = index.search(query_vectors, k)
+
+    # 将索引转换为原始ID
+    print("Converting indices to original IDs...")
+    result_ids = []
+    for query_idx in range(num_queries):
+        query_result_ids = []
+        for rank in range(k):
+            dataset_idx = indices[query_idx][rank]
+            if dataset_idx != -1:  # 有效结果
+                original_id = dataset_ids[dataset_idx]
+                query_result_ids.append(original_id)
+            else:
+                query_result_ids.append(0)  # 无效结果用0填充
+        result_ids.extend(query_result_ids)
+
+    # 保存结果
+    print("Saving results...")
+    result_ids = np.array(result_ids, dtype=np.uint64)
+    write_u64bin_file(result_ids, result_id_path)
+
+    print(f"Python FAISS search completed. Results saved to {result_id_path}")
+    print(f"Total queries: {num_queries}, Top-K: {k}")
+    print(f"Result file contains {len(result_ids)} IDs")
+
 
 def read_result_ids(file_path):
     with open(file_path, 'rb') as f:
