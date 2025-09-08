@@ -67,6 +67,9 @@ def get_args():
     parser.add_argument('--contrastive_weight', type=float, default=0.5, help='对比学习损失的权重')
     parser.add_argument('--neg_topk', type=int, default=64, help='选择top-k难负样本的数量，0表示使用所有负样本')
     parser.add_argument('--norm_output', action='store_true', help='是否对输出embedding进行L2归一化', default=True)
+    
+    # FAISS 模式选择
+    parser.add_argument('--use_python_faiss', action='store_true', help='使用Python FAISS而非命令行工具', default=True)
 
     args = parser.parse_args()
 
