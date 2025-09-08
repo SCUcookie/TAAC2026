@@ -74,7 +74,7 @@ def get_args():
 
 
 if __name__ == '__main__':
-    # torch.manual_seed(42)
+    torch.manual_seed(42)
 
     Path(os.environ.get('TRAIN_LOG_PATH')).mkdir(parents=True, exist_ok=True)
     Path(os.environ.get('TRAIN_TF_EVENTS_PATH')).mkdir(parents=True, exist_ok=True)
