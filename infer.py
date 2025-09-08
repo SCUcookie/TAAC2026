@@ -15,6 +15,13 @@ from tqdm import tqdm
 from dataset import MyTestDataset, save_emb  # 导入测试数据集和embedding保存函数
 from model import BaselineModel  # 导入基线模型
 
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+    print("Warning: FAISS not available, falling back to command line tool")
+
 
 def get_ckpt_path():
     """
