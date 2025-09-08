@@ -49,12 +49,13 @@ class SENet(nn.Module):
         self.num_features = num_features
         self.feature_dim = feature_dim
 
-        # Squeeze操作: 全局平均池化
-        self.squeeze = nn.AdaptiveAvgPool1d(1)
+
+        self.squeeze_avg = nn.AdaptiveAvgPool1d(1)
+        self.squeeze_max = nn.AdaptiveMaxPool1d(1)  # 新增最大池化
 
         # Excitation操作
         self.excitation = nn.Sequential(
-            nn.Linear(num_features, num_features // reduction_ratio, bias=False),
+            nn.Linear(num_features*2, num_features // reduction_ratio, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(num_features // reduction_ratio, num_features, bias=False),
             nn.Sigmoid()
@@ -73,10 +74,13 @@ class SENet(nn.Module):
         x_reshaped = x.view(-1, num_features, feature_dim)
 
         # 2. Squeeze: 对每个特征进行全局平均池化 [batch_size * seq_len, num_features, 1]
-        squeezed = self.squeeze(x_reshaped)
+        squeezed_avg = self.squeeze_avg(x_reshaped)  # [batch*seq, num_feat, 1]
+        squeezed_max = self.squeeze_max(x_reshaped)  # [batch*seq, num_feat, 1]
+        squeezed = torch.cat([squeezed_avg, squeezed_max], dim=1)  # [batch*seq, 2*num_feat, 1]
+
 
         # 3. Excitation: 计算注意力权重 [batch_size * seq_len, num_features]
-        squeezed = squeezed.view(-1, self.num_features)
+        squeezed = squeezed.view(-1, self.num_features*2)
         weights = self.excitation(squeezed)
         weights = weights.view(-1, self.num_features, 1)
 
@@ -682,6 +686,11 @@ class BaselineModel(torch.nn.Module):
         pos_embs = F.normalize(pos_embs, p=2, dim=-1)
         neg_embs = F.normalize(neg_embs, p=2, dim=-1)
 
+        # 计算正样本的余弦相似度
+        pos_logits = F.cosine_similarity(seq_embs, pos_embs, dim=-1).unsqueeze(-1)
+
+        # 计算负样本的余弦相似度 - 使用批内负样本
+        batch_size, maxlen, hidden_size = seq_embs.shape
 
         # 只使用有效位置的embedding来减少计算量
         valid_seq_embs = seq_embs[loss_mask]  # [num_valid, hidden_size]
@@ -694,12 +703,60 @@ class BaselineModel(torch.nn.Module):
         # 计算正样本logits（只保留有效位置）
         valid_pos_logits = F.cosine_similarity(valid_seq_embs, valid_pos_embs, dim=-1).unsqueeze(-1)  # [num_valid, 1]
 
-
         # 计算负样本相似度（只在有效位置之间）
         neg_logits = torch.matmul(valid_seq_embs, valid_neg_embs.transpose(-1, -2))  # [num_valid, num_valid]
+        # 初始化负样本张量（避免未定义错误）
+        hard_neg_logits = torch.tensor([], device=neg_logits.device)
+        easy_neg_logits = torch.tensor([], device=neg_logits.device)
 
+        # 1. 处理难负样本 (top-k)
+        if self.neg_topk > 0 and neg_logits.size(-1) > self.neg_topk:
+            hard_neg_logits, _ = torch.topk(neg_logits, self.neg_topk, dim=-1)
+        # 当不满足条件时，使用空张量或调整策略
+        elif self.neg_topk > 0:
+            # 若负样本数量不足，全部保留
+            hard_neg_logits = neg_logits
 
-        logits = torch.cat([valid_pos_logits, neg_logits], dim=-1)
+        # 2. 处理简单负样本 (2*topk随机)
+        num_valid = valid_seq_embs.size(0)
+        # 确保需要的负样本数量有效
+        required_easy = 2 * self.neg_topk if self.neg_topk > 0 else 0
+        if required_easy > 0 and neg_logits.size(-1) >= 1:
+            # 生成足够的随机索引（处理样本数量不足的情况）
+            if num_valid >= required_easy:
+                rand_indices = torch.randperm(num_valid, device=neg_logits.device)[:required_easy]
+            else:
+                # 样本不足时重复采样
+                rand_indices = torch.randint(0, num_valid, (required_easy,), device=neg_logits.device)
+
+            # 扩展索引形状并提取负样本
+            expanded_indices = rand_indices.unsqueeze(0).expand(neg_logits.size(0), -1)
+            easy_neg_logits = torch.gather(neg_logits, 1, expanded_indices)
+
+        # 3. 拼接负样本（处理空张量情况）
+        combined_neg_logits = torch.tensor([], device=neg_logits.device)
+        if hard_neg_logits.numel() > 0 and easy_neg_logits.numel() > 0:
+            # 确保两个张量第一维一致
+            if hard_neg_logits.size(0) == easy_neg_logits.size(0):
+                combined_neg_logits = torch.cat([hard_neg_logits, easy_neg_logits], dim=-1)
+            else:
+                # 维度不匹配时取最小长度
+                min_len = min(hard_neg_logits.size(0), easy_neg_logits.size(0))
+                combined_neg_logits = torch.cat([
+                    hard_neg_logits[:min_len],
+                    easy_neg_logits[:min_len]
+                ], dim=-1)
+        elif hard_neg_logits.numel() > 0:
+            combined_neg_logits = hard_neg_logits
+        elif easy_neg_logits.numel() > 0:
+            combined_neg_logits = easy_neg_logits
+
+        # 4. 拼接正负样本logits（确保有负样本）
+        if combined_neg_logits.numel() == 0:
+            # 无负样本时，可返回0损失或调整策略
+            logits = valid_pos_logits
+        else:
+            logits = torch.cat([valid_pos_logits, combined_neg_logits], dim=-1)
         # 应用温度系数
         logits = logits / self.temp
 
