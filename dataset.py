@@ -545,6 +545,7 @@ class MyTestDataset(MyDataset):
                 break
 
         seq_feat = np.where(seq_feat == None, self.feature_default_value, seq_feat)
+        seq_feat = self.all_feat2tensor(seq_feat)
 
         return seq, token_type, seq_feat, user_id
 
