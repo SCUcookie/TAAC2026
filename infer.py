@@ -295,7 +295,7 @@ def infer():
     model.eval()  # 设置为评估模式
 
     ckpt_path = get_ckpt_path()  # 获取模型检查点路径
-    # model.load_state_dict(torch.load(ckpt_path, map_location=torch.device(args.device)))
+    model.load_state_dict(torch.load(ckpt_path, map_location=torch.device(args.device)))
     
     # 生成用户序列表征embedding
     all_embs = []  # 存储所有用户的embedding
