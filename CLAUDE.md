@@ -125,7 +125,7 @@ python explore_dataset/1m_real_dataset/run_all_analysis.py
 
 Key hyperparameters configurable via command line:
 - `--batch_size`: Default 256 for training, 128 for inference
-- `--lr`: Learning rate, default 0.002 for training, 0.0007 for inference  
+- `--lr`: Learning rate, default 0.002
 - `--hidden_units`: Hidden dimension, default 128
 - `--num_blocks`: Transformer blocks, default 8
 - `--num_heads`: Attention heads, default 8
