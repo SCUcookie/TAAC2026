@@ -667,13 +667,13 @@ class BaselineModel(torch.nn.Module):
     def compute_infonce_loss(self, seq_embs, pos_embs, neg_embs, loss_mask):
         """
         计算InfoNCE对比学习损失
-        
+
         Args:
             seq_embs: 序列embedding [batch_size, maxlen, hidden_units]
-            pos_embs: 正样本embedding [batch_size, maxlen, hidden_units] 
+            pos_embs: 正样本embedding [batch_size, maxlen, hidden_units]
             neg_embs: 负样本embedding [batch_size, maxlen, hidden_units]
             loss_mask: 损失掩码 [batch_size, maxlen]
-            
+
         Returns:
             loss: InfoNCE损失值
         """
