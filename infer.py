@@ -330,19 +330,23 @@ def infer():
     save_emb(all_embs, Path(os.environ.get('EVAL_RESULT_PATH'), 'query.fbin'))
     
     # 使用FAISS进行近似最近邻(ANN)检索
-    # 这里调用预编译的FAISS工具进行高效的向量检索
-    print("Performing ANN search with FAISS...")
-    ann_cmd = (
-        str(Path("/workspace", "faiss-based-ann", "faiss_demo"))
-        + " --dataset_vector_file_path="  + str(Path(os.environ.get("EVAL_RESULT_PATH"), "embedding.fbin"))  # 候选库embedding文件
-        + " --dataset_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id.u64bin"))  # 候选库ID文件
-        + " --query_vector_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "query.fbin"))  # 用户query文件
-        + " --result_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))  # 结果文件
-        + " --query_ann_top_k=10"  # 返回Top-10结果
-        + " --faiss_M=64 --faiss_ef_construction=1280 --query_ef_search=640"  # FAISS参数配置
-        + " --faiss_metric_type=0"  # 相似度度量类型（0为内积）
-    )
-    os.system(ann_cmd)  # 执行FAISS检索命令
+    if args.use_python_faiss:
+        # 使用Python FAISS包进行检索
+        perform_python_faiss_search()
+    else:
+        # 使用命令行FAISS工具进行检索
+        print("Performing ANN search with command line FAISS...")
+        ann_cmd = (
+            str(Path("/workspace", "faiss-based-ann", "faiss_demo"))
+            + " --dataset_vector_file_path="  + str(Path(os.environ.get("EVAL_RESULT_PATH"), "embedding.fbin"))  # 候选库embedding文件
+            + " --dataset_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id.u64bin"))  # 候选库ID文件
+            + " --query_vector_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "query.fbin"))  # 用户query文件
+            + " --result_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))  # 结果文件
+            + " --query_ann_top_k=10"  # 返回Top-10结果
+            + " --faiss_M=64 --faiss_ef_construction=1280 --query_ef_search=640"  # FAISS参数配置
+            + " --faiss_metric_type=0"  # 相似度度量类型（0为内积）
+        )
+        os.system(ann_cmd)  # 执行FAISS检索命令
 
     # 读取检索结果并转换为最终推荐列表
     print("Processing search results...")
