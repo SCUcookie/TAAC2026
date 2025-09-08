@@ -580,7 +580,7 @@ class BaselineModel(torch.nn.Module):
             end_idx = min(start_idx + batch_size, len(item_ids))
 
             item_seq = torch.tensor(item_ids[start_idx:end_idx], device=self.dev).unsqueeze(0)
-            batch_feat = []
+            batch_feat_list = []
             for i in range(start_idx, end_idx):
                 batch_feat.append(feat_dict[i])
 
