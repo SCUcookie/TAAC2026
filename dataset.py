@@ -576,7 +576,7 @@ class MyTestDataset(MyDataset):
         token_type = torch.from_numpy(np.array(token_type))
 
 
-        seq_feat = list(seq_feat)
+        seq_feat = MyTestDataset.collate_dict_feature(seq_feat)
 
         return seq, token_type, seq_feat, user_id
 
