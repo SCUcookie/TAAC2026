@@ -41,8 +41,8 @@ def get_args():
     parser = argparse.ArgumentParser()
 
     # Train params
-    parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--lr', default=0.0007, type=float)
+    parser.add_argument('--batch_size', default=256, type=int)
+    parser.add_argument('--lr', default=0.002, type=float)
     parser.add_argument('--maxlen', default=101, type=int)
 
     # Baseline Model construction
