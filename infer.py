@@ -178,7 +178,13 @@ def perform_python_faiss_search():
     # 保存结果 - 修复格式问题
     print("Saving results...")
     result_ids = np.array(result_ids, dtype=np.uint64)
-    write_u64bin_file(result_ids, result_id_path)
+    
+    # 正确的格式：写入(num_queries, k)作为头部，而不是(total_results, 1)
+    with open(result_id_path, 'wb') as f:
+        # 写入正确的文件头：num_points_query, query_ann_top_k
+        f.write(struct.pack('II', num_queries, k))
+        # 写入ID数据
+        result_ids.tofile(f)
 
     print(f"Python FAISS search completed. Results saved to {result_id_path}")
     print(f"Total queries: {num_queries}, Top-K: {k}")
