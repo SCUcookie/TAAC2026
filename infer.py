@@ -175,7 +175,7 @@ def perform_python_faiss_search():
                 query_result_ids.append(0)  # 无效结果用0填充
         result_ids.extend(query_result_ids)
 
-    # 保存结果
+    # 保存结果 - 修复格式问题
     print("Saving results...")
     result_ids = np.array(result_ids, dtype=np.uint64)
     write_u64bin_file(result_ids, result_id_path)
