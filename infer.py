@@ -76,7 +76,13 @@ def get_args():
     parser.add_argument('--norm_output', action='store_true', help='是否对输出embedding进行L2归一化', default=True)
     
     # FAISS 模式选择
-    parser.add_argument('--use_python_faiss', action='store_true', help='使用Python FAISS而非命令行工具', default=True)
+    parser.add_argument('--use_python_faiss', action='store_true', help='使用Python FAISS而非命令行工具', default=False)
+    
+    # 多阶段召回参数
+    parser.add_argument('--use_multistage_recall', action='store_true', help='启用多阶段召回系统', default=True)
+    parser.add_argument('--stage1_topk', type=int, default=100, help='第一阶段粗召回的候选数量')
+    parser.add_argument('--diversity_penalty_rate', type=float, default=0.95, help='多样性惩罚衰减率')
+    parser.add_argument('--time_decay_factor', type=float, default=1.0, help='时间衰减因子')
 
     args = parser.parse_args()
 
