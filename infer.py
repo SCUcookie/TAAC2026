@@ -367,19 +367,123 @@ def infer():
         )
         os.system(ann_cmd)  # 执行FAISS检索命令
 
-    # 读取检索结果并转换为最终推荐列表
-    print("Processing search results...")
-    top10s_retrieved = read_result_ids(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))
-    top10s_untrimmed = []
+    # 多阶段召回系统实现
+    print("Implementing multi-stage recall system...")
     
-    # 将检索到的retrieval_id转换为creative_id
-    for top10 in tqdm(top10s_retrieved, desc="Converting IDs"):
-        for item in top10:
-            creative_id = retrieve_id2creative_id.get(int(item), 0)
-            top10s_untrimmed.append(creative_id)
+    if args.use_multistage_recall:
+        # 阶段1：粗召回（更大的候选集）
+        print("Stage 1: Coarse recall (Top-100)...")
+        top100s_retrieved = read_result_ids(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))
+        
+        # 调试信息
+        print(f"DEBUG: Retrieved results shape: {len(top100s_retrieved)} users x {len(top100s_retrieved[0]) if len(top100s_retrieved) > 0 else 0} items")
+        print(f"DEBUG: retrieve_id2creative_id mapping size: {len(retrieve_id2creative_id)}")
+        print(f"DEBUG: User list size: {len(user_list)}")
+        
+        # 采样检查映射质量
+        if len(retrieve_id2creative_id) > 0:
+            sample_keys = list(retrieve_id2creative_id.keys())[:10]
+            sample_mappings = [(k, retrieve_id2creative_id[k]) for k in sample_keys]
+            print(f"DEBUG: Sample mappings: {sample_mappings}")
+        
+        # 简化多阶段召回：只进行基本的重排，避免复杂逻辑导致结果全是0
+        print("Stage 2: Simplified re-ranking...")
+        top10s_reranked = []
+        
+        for user_idx, top100_items in enumerate(top100s_retrieved):
+            # 简化逻辑：直接转换ID并选择前10个有效的
+            valid_items = []
+            
+            # 调试前3个用户的处理过程
+            if user_idx < 3:
+                print(f"DEBUG: Processing user {user_idx+1}, got {len(top100_items)} candidates")
+            
+            for item_retrieval_id in top100_items[:20]:  # 只检查前20个，避免过多计算
+                item_creative_id = retrieve_id2creative_id.get(int(item_retrieval_id), "0")
+                
+                # 调试前3个用户前5个候选的转换
+                if user_idx < 3 and len(valid_items) < 5:
+                    print(f"DEBUG: User {user_idx+1}: retrieval_id={item_retrieval_id} -> creative_id='{item_creative_id}'")
+                
+                # 检查是否为有效ID
+                try:
+                    item_id_int = int(item_creative_id) if item_creative_id != "0" else 0
+                    if item_id_int > 0:
+                        valid_items.append(item_creative_id)
+                except (ValueError, TypeError):
+                    continue
+                
+                # 收集到10个有效项目就停止
+                if len(valid_items) >= 10:
+                    break
+            
+            # 如果有效项目不足10个，补充到10个
+            while len(valid_items) < 10:
+                # 从剩余的候选中继续寻找
+                found = False
+                for item_retrieval_id in top100_items[len(valid_items):]:
+                    item_creative_id = retrieve_id2creative_id.get(int(item_retrieval_id), "0")
+                    if item_creative_id != "0" and item_creative_id not in valid_items:
+                        try:
+                            if int(item_creative_id) > 0:
+                                valid_items.append(item_creative_id)
+                                found = True
+                                break
+                        except (ValueError, TypeError):
+                            continue
+                
+                if not found:
+                    valid_items.append("0")  # 无法找到更多有效项目时用0填充
+            
+            top10s_reranked.append(valid_items[:10])
+        
+        top10s = top10s_reranked
+        print(f"Multi-stage recall completed. Users: {len(top10s)}")
+        
+    else:
+        # 修复的单阶段召回：解决ID转换问题
+        print("Using fixed single-stage recall...")
+        top10s_retrieved = read_result_ids(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))
+        
+        # 调试信息
+        print(f"DEBUG: Retrieved results shape: {len(top10s_retrieved)} users x {len(top10s_retrieved[0]) if len(top10s_retrieved) > 0 else 0} items")
+        print(f"DEBUG: retrieve_id2creative_id mapping size: {len(retrieve_id2creative_id)}")
+        
+        # 采样检查映射质量
+        if len(retrieve_id2creative_id) > 0:
+            sample_keys = list(retrieve_id2creative_id.keys())[:10]
+            sample_mappings = [(k, retrieve_id2creative_id[k]) for k in sample_keys]
+            print(f"DEBUG: Sample mappings: {sample_mappings}")
+        
+        top10s_final = []
+        
+        # 为每个用户处理Top-10候选
+        for user_idx, user_candidates in enumerate(tqdm(top10s_retrieved, desc="Converting IDs")):
+            user_results = []
+            
+            # 处理每个候选item（前10个）
+            for item_idx, item_retrieval_id in enumerate(user_candidates[:10]):
+                creative_id = retrieve_id2creative_id.get(int(item_retrieval_id), "0")
+                
+                # 调试前几个用户的转换过程
+                if user_idx < 3 and item_idx < 5:
+                    print(f"DEBUG: User {user_idx+1}, Item {item_idx+1}: retrieval_id={item_retrieval_id} -> creative_id='{creative_id}'")
+                
+                user_results.append(str(creative_id))
+            
+            # 确保每个用户都有10个结果
+            while len(user_results) < 10:
+                user_results.append("0")
+            
+            top10s_final.append(user_results[:10])
+        
+        top10s = top10s_final
+        
+        # 统计结果质量
+        valid_count = sum(1 for user_list in top10s for item_id in user_list if item_id != "0")
+        total_count = len(top10s) * 10
+        print(f"DEBUG: Result quality: {valid_count}/{total_count} ({100*valid_count/total_count:.1f}%) valid recommendations")
 
-    # 将结果重新组织为每个用户的Top-10列表
-    top10s = [top10s_untrimmed[i : i + 10] for i in range(0, len(top10s_untrimmed), 10)]
 
     return top10s, user_list
 
