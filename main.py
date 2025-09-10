@@ -251,7 +251,6 @@ if __name__ == '__main__':
             writer.add_scalar("Trainer/grad_norm_after_clip", total_norm, global_step)
 
             writer.add_scalar("Trainer/lr", lr, global_step)
-
             optimizer.step()
 
 

@@ -154,7 +154,7 @@ class TimeFeatureExtractor:
         # 2. 小时、星期、月份特征 (UTC+8)
         ts_utc8 = ts_array + 8 * 3600
         hours = (ts_utc8 % 86400) // 3600
-        weekdays = ((ts_utc8 // 86400 + 4) % 7).astype(np.int32)  # 周一=0
+        weekdays = ((ts_utc8 // 86400 + 3) % 7).astype(np.int32)  # 周一=0
         
         # 使用pandas处理月份转换，提高效率
         try:
@@ -169,7 +169,13 @@ class TimeFeatureExtractor:
         delta_t = last_ts - ts_array
         delta_scaled = np.log1p(delta_t.astype(np.float64) / self.tau)
         
-        # 4. 将连续值离散化为稀疏特征索引
+        # 4. 新增：当前交互与序列首元素的时间差特征 (206)
+        first_ts = ts_array[0]  # 序列第一个交互的时间戳
+        first_gap = ts_array - first_ts  # 与首元素的时间差
+        log_first_gap = np.log1p(first_gap.astype(np.float64))  # 取对数平滑
+        first_gap_buckets = self._discretize_continuous_feature(log_first_gap, num_buckets=100)  # 离散化
+        
+        # 5. 将连续值离散化为稀疏特征索引
         log_gap_buckets = self._discretize_continuous_feature(log_gap, num_buckets=100)
         delta_buckets = self._discretize_continuous_feature(delta_scaled, num_buckets=100)
         
@@ -182,6 +188,7 @@ class TimeFeatureExtractor:
                 "203": int(log_gap_buckets[idx]),    # 对数时间间隔离散化 (0-99)
                 "204": int(months[idx]),             # 月份 (1-12)
                 "205": int(delta_buckets[idx]),      # 时间衰减离散化 (0-99)
+                "206": int(first_gap_buckets[idx]),  # 与序列首元素时间差离散化 (0-99)
                 # "202": int(time_gap[idx])          # 原始时间间隔 (可选)
             }
             features_list.append(features)

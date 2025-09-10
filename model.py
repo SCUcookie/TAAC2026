@@ -237,11 +237,12 @@ class BaselineModel(torch.nn.Module):
 
         self._init_feat_info(feat_statistics, feat_types)
 
+
         userdim = args.hidden_units * (len(self.USER_SPARSE_FEAT) + 1 + len(self.USER_ARRAY_FEAT)) + len(
             self.USER_CONTINUAL_FEAT
         )
         itemdim = (
-                args.hidden_units * (len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) - 2)
+                args.hidden_units * (len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) + len(self.ITEM_TEMP_TIME_FEAT) - 2)
                 + len(self.ITEM_CONTINUAL_FEAT)
                 + args.hidden_units * len(self.ITEM_EMB_FEAT)
         )
@@ -250,7 +251,7 @@ class BaselineModel(torch.nn.Module):
         user_feature_num = (len(self.USER_SPARSE_FEAT) + 1 + len(self.USER_ARRAY_FEAT)) + len(
             self.USER_CONTINUAL_FEAT
         )
-        item_feature_num = len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) - 2 + len(self.ITEM_CONTINUAL_FEAT) + len(self.ITEM_EMB_FEAT)
+        item_feature_num = len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) + len(self.ITEM_TEMP_TIME_FEAT) - 2 + len(self.ITEM_CONTINUAL_FEAT) + len(self.ITEM_EMB_FEAT)
 
         self.item_senet = SENet(item_feature_num, args.hidden_units)
         self.user_senet = SENet(user_feature_num, args.hidden_units)
@@ -289,6 +290,10 @@ class BaselineModel(torch.nn.Module):
             self.sparse_emb[k] = torch.nn.Embedding(self.USER_ARRAY_FEAT[k] + 1, args.hidden_units, padding_idx=0)
         for k in self.ITEM_EMB_FEAT:
             self.emb_transform[k] = torch.nn.Linear(self.ITEM_EMB_FEAT[k], args.hidden_units)
+        
+        # 新增：物品侧临时时间特征的embedding声明
+        for k in self.ITEM_TEMP_TIME_FEAT:
+            self.sparse_emb[k] = torch.nn.Embedding(self.ITEM_TEMP_TIME_FEAT[k] + 1, args.hidden_units, padding_idx=0)
 
         self.reset_embeddings()
 
@@ -343,6 +348,9 @@ class BaselineModel(torch.nn.Module):
         # EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 3584}
         EMB_SHAPE_DICT = {"81": 32, "82": 1024, "83": 3584, "84": 4096, "85": 3584, "86": 1024}
         self.ITEM_EMB_FEAT = {k: EMB_SHAPE_DICT[k] for k in feat_types['item_emb']}  # 记录的是不同多模态特征的维度
+        
+        # 新增：物品侧临时时间特征 - 处理从用户侧传递过来的时间上下文特征
+        self.ITEM_TEMP_TIME_FEAT = {k: feat_statistics[k] for k in feat_types.get('item_temp_time', [])}
 
     def feat2tensor(self, seq_feature, k):
         """
@@ -423,6 +431,8 @@ class BaselineModel(torch.nn.Module):
             (self.ITEM_SPARSE_FEAT, 'item_sparse', item_feat_list),
             (self.ITEM_ARRAY_FEAT, 'item_array', item_feat_list),
             (self.ITEM_CONTINUAL_FEAT, 'item_continual', item_feat_list),
+            # 新增：物品侧临时时间特征处理
+            (self.ITEM_TEMP_TIME_FEAT, 'item_temp_time', item_feat_list),
         ]
 
         if include_user:
@@ -452,6 +462,11 @@ class BaselineModel(torch.nn.Module):
                     feat_list.append(self.sparse_emb[k](tensor_feature).sum(2))
                 elif feat_type.endswith('continual'):
                     feat_list.append(tensor_feature.unsqueeze(2))
+                elif feat_type == 'item_temp_time':
+                    # 物品侧临时时间特征处理：与稀疏特征相同的处理方式
+                    time_emb = self.sparse_emb[k](tensor_feature)
+                    # 直接输出时间权重，不使用可学习参数
+                    feat_list.append(time_emb)
 
         for k in self.ITEM_EMB_FEAT:
             batch_emb_data = feature_array[k]
@@ -596,6 +611,11 @@ class BaselineModel(torch.nn.Module):
             for feat in batch_feat_list:
                 all_feat_ids.update(feat.keys())
             
+            # 确保所有需要的特征ID都存在于feature_array中
+            for feat_id in self.ITEM_TEMP_TIME_FEAT.keys():
+                if feat_id not in all_feat_ids:
+                    all_feat_ids.add(feat_id)
+            
             # 为每个特征ID创建tensor
             for feat_id in all_feat_ids:
                 if feat_id in self.ITEM_SPARSE_FEAT or feat_id in self.USER_SPARSE_FEAT:
@@ -652,6 +672,16 @@ class BaselineModel(torch.nn.Module):
                             feat_embeddings.append(np.zeros(emb_dim, dtype=np.float32))
                     
                     feature_array[feat_id] = torch.tensor(np.array(feat_embeddings), device=self.dev).unsqueeze(0)
+                
+                elif feat_id in self.ITEM_TEMP_TIME_FEAT:
+                    # 物品侧临时时间特征处理（与稀疏特征逻辑一致）
+                    feat_values = []
+                    for feat in batch_feat_list:
+                        if feat_id in feat:
+                            feat_values.append(feat[feat_id])
+                        else:
+                            feat_values.append(0)  # 默认值
+                    feature_array[feat_id] = torch.tensor(feat_values, device=self.dev).unsqueeze(0)
 
             batch_emb = self.feat2emb(item_seq, feature_array, include_user=False).squeeze(0)
 

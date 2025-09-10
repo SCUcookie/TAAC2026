@@ -328,7 +328,7 @@ class MyDataset(torch.utils.data.Dataset):
         feat_default_value = {}
         feat_statistics = {}
         feat_types = {}
-        feat_types['user_sparse'] = ['103', '104', '105', '109', '200', '201', '203', '204', '205']
+        feat_types['user_sparse'] = ['103', '104', '105', '109', '200', '201', '203', '204', '205', '206']
         feat_types['item_sparse'] = [
             '100',
             '117',
@@ -350,11 +350,14 @@ class MyDataset(torch.utils.data.Dataset):
         feat_types['item_emb'] = self.mm_emb_ids
         feat_types['user_continual'] = []
         feat_types['item_continual'] = []
+        
+        # 新增：物品侧临时时间特征类型 - 从用户侧传递过来的时间上下文特征
+        feat_types['item_temp_time'] = ['200', '201', '203', '204', '205', '206']
 
         for feat_id in feat_types['user_sparse']:
             feat_default_value[feat_id] = 0
             # 时间特征不在索引器中，需要特殊处理
-            if feat_id in ['200', '201', '203', '204', '205']:  # 时间相关稀疏特征
+            if feat_id in ['200', '201', '203', '204', '205', '206']:  # 时间相关稀疏特征
                 if feat_id == '200':  # 小时 (0-23)
                     feat_statistics[feat_id] = 24
                 elif feat_id == '201':  # 星期 (0-6)  
@@ -364,6 +367,8 @@ class MyDataset(torch.utils.data.Dataset):
                 elif feat_id == '204':  # 月份 (1-12)
                     feat_statistics[feat_id] = 12
                 elif feat_id == '205':  # 时间衰减离散化 (0-99)
+                    feat_statistics[feat_id] = 100
+                elif feat_id == '206':  # 与序列首元素时间差离散化 (0-99)
                     feat_statistics[feat_id] = 100
             else:
                 feat_statistics[feat_id] = len(self.indexer['f'][feat_id])
@@ -384,6 +389,23 @@ class MyDataset(torch.utils.data.Dataset):
             feat_default_value[feat_id] = np.zeros(
                 list(self.mm_emb_dict[feat_id].values())[0].shape[0], dtype=np.float32
             )
+        
+        # 新增：物品侧临时时间特征的默认值和统计信息
+        for feat_id in feat_types['item_temp_time']:
+            feat_default_value[feat_id] = 0
+            # 复用用户侧时间特征的统计信息，确保embedding维度一致
+            if feat_id == '200':  # 小时 (0-23)
+                feat_statistics[feat_id] = 24
+            elif feat_id == '201':  # 星期 (0-6)  
+                feat_statistics[feat_id] = 7
+            elif feat_id == '203':  # 对数间隔离散化 (0-99)
+                feat_statistics[feat_id] = 100  
+            elif feat_id == '204':  # 月份 (1-12)
+                feat_statistics[feat_id] = 12
+            elif feat_id == '205':  # 时间衰减离散化 (0-99)
+                feat_statistics[feat_id] = 100
+            elif feat_id == '206':  # 与序列首元素时间差离散化 (0-99)
+                feat_statistics[feat_id] = 100
 
         self.USER_SPARSE_FEAT = {k: feat_statistics[k] for k in feat_types['user_sparse']}
         self.USER_CONTINUAL_FEAT = feat_types['user_continual']
