@@ -27,7 +27,10 @@
       "Bash(set \"PYTHONUNBUFFERED=1\")",
       "Bash(set \"USER_CACHE_PATH=./cache\")",
       "Bash(set \"EVAL_RESULT_PATH=./eval_cache\")",
-      "Bash(test_infer.bat)"
+      "Bash(test_infer.bat)",
+      "Bash(timeout 30 python:*)",
+      "Bash(PYTHONUNBUFFERED=1 TRAIN_CKPT_PATH=./ckpt TRAIN_DATA_PATH=./dataset/TencentGR_1k TRAIN_LOG_PATH=./logs TRAIN_TF_EVENTS_PATH=./tf_events USER_CACHE_PATH=./user_cache timeout 30 python main.py --use_hstu --maxlen 50 --batch_size 8 --num_blocks 2 --num_heads 4)",
+      "Bash(PYTHONUNBUFFERED=1 TRAIN_CKPT_PATH=./ckpt TRAIN_DATA_PATH=./dataset/TencentGR_1k TRAIN_LOG_PATH=./logs TRAIN_TF_EVENTS_PATH=./tf_events USER_CACHE_PATH=./user_cache timeout 45 python main.py --use_hstu --maxlen 30 --batch_size 4 --num_blocks 1 --num_heads 2)"
     ],
     "deny": [],
     "ask": []

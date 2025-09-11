@@ -7,6 +7,113 @@ import torch.nn.functional as F
 from tqdm import tqdm
 
 from dataset import save_emb
+import abc
+from typing import Callable, Optional, Tuple
+
+
+class RelativeAttentionBiasModule(torch.nn.Module):
+    @abc.abstractmethod
+    def forward(
+        self,
+        all_timestamps: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            all_timestamps: [B, N] x int64
+        Returns:
+            torch.float tensor broadcastable to [B, N, N]
+        """
+        pass
+
+
+class RelativePositionalBias(RelativeAttentionBiasModule):
+    def __init__(self, max_seq_len: int) -> None:
+        super().__init__()
+
+        self._max_seq_len: int = max_seq_len
+        self._w = torch.nn.Parameter(
+            torch.empty(2 * max_seq_len - 1).normal_(mean=0, std=0.02),
+        )
+
+    def forward(
+        self,
+        all_timestamps: torch.Tensor,
+    ) -> torch.Tensor:
+        del all_timestamps
+        n: int = self._max_seq_len
+        t = F.pad(self._w[: 2 * n - 1], [0, n]).repeat(n)
+        t = t[..., :-n].reshape(1, n, 3 * n - 2)
+        r = (2 * n - 1) // 2
+        return t[..., r:-r]
+
+
+class RelativeBucketedTimeAndPositionBasedBias(RelativeAttentionBiasModule):
+    """
+    Bucketizes timespans based on ts(next-item) - ts(current-item).
+    """
+
+    def __init__(
+        self,
+        max_seq_len: int,
+        num_buckets: int,
+        bucketization_fn: Callable[[torch.Tensor], torch.Tensor],
+    ) -> None:
+        super().__init__()
+
+        self._max_seq_len: int = max_seq_len
+        self._ts_w = torch.nn.Parameter(
+            torch.empty(num_buckets + 1).normal_(mean=0, std=0.02),
+        )
+        self._pos_w = torch.nn.Parameter(
+            torch.empty(2 * max_seq_len - 1).normal_(mean=0, std=0.02),
+        )
+        self._num_buckets: int = num_buckets
+        self._bucketization_fn: Callable[[torch.Tensor], torch.Tensor] = (
+            bucketization_fn
+        )
+
+    def forward(
+        self,
+        all_timestamps: torch.Tensor,
+    ) -> torch.Tensor:
+        """
+        Args:
+            all_timestamps: (B, N).
+        Returns:
+            (B, N, N).
+        """
+        B, N = all_timestamps.size()  # Use actual sequence length from input
+        max_len = self._max_seq_len
+        
+        # Handle cases where actual sequence length differs from max_seq_len
+        if N > max_len:
+            # If input is longer than max_len, truncate the positional weights
+            pos_w = self._pos_w[: 2 * N - 1] if len(self._pos_w) >= 2 * N - 1 else F.pad(self._pos_w, [0, 2 * N - 1 - len(self._pos_w)])
+        else:
+            # If input is shorter, use only the needed portion
+            pos_w = self._pos_w[: 2 * N - 1]
+        
+        t = F.pad(pos_w, [0, N]).repeat(N)
+        t = t[..., :-N].reshape(1, N, 3 * N - 2)
+        r = (2 * N - 1) // 2
+
+        # [B, N + 1] to simplify tensor manipulations.
+        ext_timestamps = torch.cat(
+            [all_timestamps, all_timestamps[:, -1:]], dim=1  # Use last timestamp instead of fixed index
+        )
+        # causal masking. Otherwise [:, :-1] - [:, 1:] works
+        bucketed_timestamps = torch.clamp(
+            self._bucketization_fn(
+                ext_timestamps[:, 1:].unsqueeze(2) - ext_timestamps[:, :-1].unsqueeze(1)
+            ),
+            min=0,
+            max=self._num_buckets,
+        ).detach()
+        rel_pos_bias = t[:, :, r:-r]
+        rel_ts_bias = torch.index_select(
+            self._ts_w, dim=0, index=bucketed_timestamps.view(-1)
+        ).view(B, N, N)
+        return rel_pos_bias + rel_ts_bias
 
 
 class RotaryEmbedding(torch.nn.Module):
@@ -166,6 +273,136 @@ class FlashMultiHeadAttention(torch.nn.Module):
         return output, None
 
 
+class HSTUMultiHeadAttention(torch.nn.Module):
+    """
+    HSTU-style multi-head attention with SiLU activation and relative bias support
+    """
+    def __init__(self, embedding_dim, linear_hidden_dim, attention_dim, num_heads, 
+                 dropout_rate, relative_attention_bias_module=None, 
+                 linear_activation="silu", concat_ua=False, epsilon=1e-6):
+        super(HSTUMultiHeadAttention, self).__init__()
+        
+        self.embedding_dim = embedding_dim
+        self.linear_dim = linear_hidden_dim
+        self.attention_dim = attention_dim
+        self.num_heads = num_heads
+        self.dropout_rate = dropout_rate
+        self.rel_attn_bias = relative_attention_bias_module
+        self.linear_activation = linear_activation
+        self.concat_ua = concat_ua
+        self.eps = epsilon
+        
+        assert attention_dim % num_heads == 0, "attention_dim must be divisible by num_heads"
+        assert linear_hidden_dim % num_heads == 0, "linear_hidden_dim must be divisible by num_heads"
+        
+        # UVQK linear transformation (following HSTU paper)
+        self.uvqk = torch.nn.Parameter(
+            torch.empty(
+                embedding_dim,
+                linear_hidden_dim * 2 + attention_dim * 2
+            ).normal_(mean=0, std=0.02)
+        )
+        
+        # Output projection
+        output_dim = linear_hidden_dim * (3 if concat_ua else 1)
+        self.out_proj = torch.nn.Linear(output_dim, embedding_dim)
+        torch.nn.init.xavier_uniform_(self.out_proj.weight)
+        
+    def forward(self, x, all_timestamps=None, invalid_attn_mask=None):
+        """
+        Args:
+            x: [batch_size, seq_len, embedding_dim]
+            all_timestamps: [batch_size, seq_len] for time-based relative bias
+            invalid_attn_mask: [batch_size, seq_len, seq_len] attention mask
+        Returns:
+            output: [batch_size, seq_len, embedding_dim]
+        """
+        batch_size, seq_len, _ = x.shape
+        
+        # Layer normalization first
+        normed_x = F.layer_norm(x, normalized_shape=[self.embedding_dim], eps=self.eps)
+        
+        # UVQK transformation
+        uvqk_output = torch.mm(
+            normed_x.view(-1, self.embedding_dim), 
+            self.uvqk
+        )
+        
+        # Apply activation
+        if self.linear_activation == "silu":
+            uvqk_output = F.silu(uvqk_output)
+        
+        # Split into U, V, Q, K
+        u, v, q, k = torch.split(
+            uvqk_output,
+            [self.linear_dim, self.linear_dim, self.attention_dim, self.attention_dim],
+            dim=1
+        )
+        
+        # Reshape for multi-head attention
+        q = q.view(batch_size, seq_len, self.num_heads, self.attention_dim // self.num_heads)
+        k = k.view(batch_size, seq_len, self.num_heads, self.attention_dim // self.num_heads)
+        v = v.view(batch_size, seq_len, self.num_heads, self.linear_dim // self.num_heads)
+        u = u.view(batch_size, seq_len, self.linear_dim)
+        
+        # Transpose for attention computation
+        q = q.transpose(1, 2)  # [batch_size, num_heads, seq_len, head_dim]
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+        
+        # Compute attention scores
+        qk_scores = torch.matmul(q, k.transpose(-2, -1))
+        
+        # Add relative bias if available
+        if self.rel_attn_bias is not None and all_timestamps is not None:
+            rel_bias = self.rel_attn_bias(all_timestamps)
+            qk_scores = qk_scores + rel_bias.unsqueeze(1)  # Broadcast over heads
+        
+        # HSTU-style attention: SiLU instead of softmax
+        attention_weights = F.silu(qk_scores) / seq_len
+        
+        # Apply attention mask
+        if invalid_attn_mask is not None:
+            # Ensure mask has the right shape: [batch_size, 1, seq_len, seq_len] or [batch_size, seq_len, seq_len]
+            if invalid_attn_mask.dim() == 3:  # [B, seq_len, seq_len]
+                mask = invalid_attn_mask.unsqueeze(1)  # [B, 1, seq_len, seq_len]
+            elif invalid_attn_mask.dim() == 2:  # [B, seq_len] - causal mask
+                # Convert to [B, 1, seq_len, seq_len] format
+                mask = invalid_attn_mask.unsqueeze(1).unsqueeze(1).expand(-1, 1, seq_len, -1)
+            else:
+                mask = invalid_attn_mask
+            attention_weights = attention_weights * mask
+        
+        # Apply dropout
+        attention_weights = F.dropout(attention_weights, p=self.dropout_rate, training=self.training)
+        
+        # Compute attention output
+        attn_output = torch.matmul(attention_weights, v)
+        
+        # Reshape back
+        attn_output = attn_output.transpose(1, 2).contiguous().view(
+            batch_size, seq_len, self.linear_dim
+        )
+        
+        # Layer norm on attention output
+        attn_output = F.layer_norm(attn_output, normalized_shape=[self.linear_dim], eps=self.eps)
+        
+        # Combine with U (gating mechanism)
+        if self.concat_ua:
+            # Concatenate u, attn_output, and their element-wise product
+            combined = torch.cat([u, attn_output, u * attn_output], dim=-1)
+        else:
+            # Element-wise product only
+            combined = u * attn_output
+        
+        # Final output projection with residual connection
+        output = self.out_proj(
+            F.dropout(combined, p=self.dropout_rate, training=self.training)
+        ) + x
+        
+        return output, attention_weights
+
+
 class PointWiseFeedForward(torch.nn.Module):
     def __init__(self, hidden_units, dropout_rate):
         super(PointWiseFeedForward, self).__init__()
@@ -220,6 +457,14 @@ class BaselineModel(torch.nn.Module):
         self.loss_type = getattr(args, 'loss_type', 'bce')
         self.neg_topk = max(getattr(args, 'neg_topk', 0), 0)  # 确保非负
         self.norm_output = getattr(args, 'norm_output', False)
+        
+        # HSTU 相关参数
+        self.use_hstu = getattr(args, 'use_hstu', False)
+        self.hstu_attention_dim = getattr(args, 'hstu_attention_dim', args.hidden_units)
+        self.hstu_linear_dim = getattr(args, 'hstu_linear_dim', args.hidden_units)
+        self.hstu_concat_ua = getattr(args, 'hstu_concat_ua', False)
+        self.hstu_enable_relative_bias = getattr(args, 'hstu_enable_relative_bias', True)
+        self.hstu_num_buckets = getattr(args, 'hstu_num_buckets', 128)
         # TODO: loss += args.l2_emb for regularizing embedding vectors during training
         # https://stackoverflow.com/questions/42704283/adding-l1-l2-regularization-in-pytorch
 
@@ -261,20 +506,48 @@ class BaselineModel(torch.nn.Module):
 
         self.last_layernorm = torch.nn.LayerNorm(args.hidden_units, eps=1e-8)
 
-        for _ in range(args.num_blocks):
-            new_attn_layernorm = torch.nn.LayerNorm(args.hidden_units, eps=1e-8)
-            self.attention_layernorms.append(new_attn_layernorm)
+        # 根据配置选择注意力机制
+        if self.use_hstu:
+            # 创建相对注意力偏置模块（如果启用）
+            rel_bias_module = None
+            if self.hstu_enable_relative_bias:
+                rel_bias_module = RelativeBucketedTimeAndPositionBasedBias(
+                    max_seq_len=args.maxlen,
+                    num_buckets=self.hstu_num_buckets,
+                    bucketization_fn=lambda x: (
+                        torch.log(torch.abs(x).clamp(min=1)) / 0.301
+                    ).long(),
+                )
+            
+            # 创建HSTU attention layers
+            for _ in range(args.num_blocks):
+                new_attn_layer = HSTUMultiHeadAttention(
+                    embedding_dim=args.hidden_units,
+                    linear_hidden_dim=self.hstu_linear_dim,
+                    attention_dim=self.hstu_attention_dim,
+                    num_heads=args.num_heads,
+                    dropout_rate=args.dropout_rate,
+                    relative_attention_bias_module=rel_bias_module,
+                    concat_ua=self.hstu_concat_ua
+                )
+                self.attention_layers.append(new_attn_layer)
+                # HSTU不需要额外的layernorm和feedforward，因为都集成在HSTUMultiHeadAttention中了
+        else:
+            # 使用原有的attention机制
+            for _ in range(args.num_blocks):
+                new_attn_layernorm = torch.nn.LayerNorm(args.hidden_units, eps=1e-8)
+                self.attention_layernorms.append(new_attn_layernorm)
 
-            new_attn_layer = FlashMultiHeadAttention(
-                args.hidden_units, args.num_heads, args.dropout_rate
-            )  # 优化：用FlashAttention替代标准Attention
-            self.attention_layers.append(new_attn_layer)
+                new_attn_layer = FlashMultiHeadAttention(
+                    args.hidden_units, args.num_heads, args.dropout_rate
+                )  # 优化：用FlashAttention替代标准Attention
+                self.attention_layers.append(new_attn_layer)
 
-            new_fwd_layernorm = torch.nn.LayerNorm(args.hidden_units, eps=1e-8)
-            self.forward_layernorms.append(new_fwd_layernorm)
+                new_fwd_layernorm = torch.nn.LayerNorm(args.hidden_units, eps=1e-8)
+                self.forward_layernorms.append(new_fwd_layernorm)
 
-            new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout_rate)
-            self.forward_layers.append(new_fwd_layer)
+                new_fwd_layer = PointWiseFeedForward(args.hidden_units, args.dropout_rate)
+                self.forward_layers.append(new_fwd_layer)
 
         for k in self.USER_SPARSE_FEAT:
             self.sparse_emb[k] = torch.nn.Embedding(self.USER_SPARSE_FEAT[k] + 1, args.hidden_units, padding_idx=0)
@@ -513,16 +786,37 @@ class BaselineModel(torch.nn.Module):
         attention_mask_pad = (mask != 0).to(self.dev)
         attention_mask = attention_mask_tril.unsqueeze(0) & attention_mask_pad.unsqueeze(1)
 
-        for i in range(len(self.attention_layers)):
-            if self.norm_first:
-                x = self.attention_layernorms[i](seqs)
-                mha_outputs, _ = self.attention_layers[i](x, x, x, attn_mask=attention_mask)
-                seqs = seqs + mha_outputs
-                seqs = seqs + self.forward_layers[i](self.forward_layernorms[i](seqs))
-            else:
-                mha_outputs, _ = self.attention_layers[i](seqs, seqs, seqs, attn_mask=attention_mask)
-                seqs = self.attention_layernorms[i](seqs + mha_outputs)
-                seqs = self.forward_layernorms[i](seqs + self.forward_layers[i](seqs))
+        # 提取时间戳用于HSTU相对偏置（如果可用）
+        all_timestamps = None
+        if self.use_hstu and self.hstu_enable_relative_bias:
+            # 尝试从seq_feature中提取时间信息
+            # 这里假设时间特征存在于seq_feature中，如果不存在则使用位置信息
+            try:
+                # 创建模拟时间戳（基于位置）
+                all_timestamps = torch.arange(maxlen, device=self.dev).unsqueeze(0).expand(batch_size, -1)
+            except:
+                all_timestamps = None
+
+        if self.use_hstu:
+            # HSTU forward pass
+            for i in range(len(self.attention_layers)):
+                seqs, _ = self.attention_layers[i](
+                    seqs, 
+                    all_timestamps=all_timestamps,
+                    invalid_attn_mask=1.0 - attention_mask.float()
+                )
+        else:
+            # 原有的attention forward pass
+            for i in range(len(self.attention_layers)):
+                if self.norm_first:
+                    x = self.attention_layernorms[i](seqs)
+                    mha_outputs, _ = self.attention_layers[i](x, x, x, attn_mask=attention_mask)
+                    seqs = seqs + mha_outputs
+                    seqs = seqs + self.forward_layers[i](self.forward_layernorms[i](seqs))
+                else:
+                    mha_outputs, _ = self.attention_layers[i](seqs, seqs, seqs, attn_mask=attention_mask)
+                    seqs = self.attention_layernorms[i](seqs + mha_outputs)
+                    seqs = self.forward_layernorms[i](seqs + self.forward_layers[i](seqs))
 
         log_feats = self.last_layernorm(seqs)
 
