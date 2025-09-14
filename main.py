@@ -41,9 +41,9 @@ def get_args():
 
     # Baseline Model construction
     parser.add_argument('--hidden_units', default=128, type=int)
-    parser.add_argument('--num_blocks', default=8, type=int)
-    parser.add_argument('--num_epochs', default=15, type=int)
-    parser.add_argument('--num_heads', default=8, type=int)
+    parser.add_argument('--num_blocks', default=4, type=int)
+    parser.add_argument('--num_epochs', default=10, type=int)
+    parser.add_argument('--num_heads', default=16, type=int)
     parser.add_argument('--dropout_rate', default=0.2, type=float)
     parser.add_argument('--l2_emb', default=0.0, type=float)
     parser.add_argument('--device', default='cuda', type=str)
@@ -56,33 +56,19 @@ def get_args():
 
     # InfoNCE 相关参数
     parser.add_argument('--loss_type', choices=['bce', 'infonce', 'mix'], default='infonce', help='选择损失函数类型')
-    parser.add_argument('--temp', type=float, default=0.03, help='InfoNCE损失的温度系数')
+    parser.add_argument('--temp', type=float, default=0.02, help='InfoNCE损失的温度系数')
     parser.add_argument('--contrastive_weight', type=float, default=1.0, help='对比学习损失的权重')
-    parser.add_argument('--neg_topk', type=int, default=128, help='选择top-k难负样本的数量，0表示使用所有负样本')
+    parser.add_argument('--neg_topk', type=int, default=64, help='选择top-k难负样本的数量，0表示使用所有负样本')
     parser.add_argument('--norm_output', action='store_true', help='是否对输出embedding进行L2归一化')
     parser.add_argument('--tau_schedule', choices=['const', 'cosine', 'linear'], default='const', help='温度系数调度策略')
     parser.add_argument('--label_smoothing', type=float, default=0.0, help='标签平滑参数')
     parser.add_argument('--use_action_weight', action='store_true', help='是否使用动作权重')
-
-    # HSTU 相关参数
-    parser.add_argument('--use_hstu', action='store_true', default=True, help='是否使用HSTU架构（默认False）')
-    parser.add_argument('--hstu_attention_dim', type=int, default=None, help='HSTU注意力维度（默认与hidden_units相同）')
-    parser.add_argument('--hstu_linear_dim', type=int, default=None, help='HSTU线性维度（默认与hidden_units相同）')
-    parser.add_argument('--hstu_concat_ua', action='store_true', help='HSTU是否连接u和a（默认False）')
-    parser.add_argument('--hstu_enable_relative_bias', action='store_true', default=True, help='HSTU是否启用相对偏置（默认True）')
-    parser.add_argument('--hstu_num_buckets', type=int, default=128, help='HSTU时间桶数量（默认128）')
 
     #训练参数相关
     parser.add_argument('--warmup_steps', default=800, type=int)
     parser.add_argument('--weight_decay', default=0.01, type=float)
 
     args = parser.parse_args()
-    
-    # 设置HSTU参数的默认值
-    if args.hstu_attention_dim is None:
-        args.hstu_attention_dim = args.hidden_units
-    if args.hstu_linear_dim is None:
-        args.hstu_linear_dim = args.hidden_units
 
     return args
 

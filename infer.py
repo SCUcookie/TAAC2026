@@ -65,14 +65,6 @@ def get_args():
     parser.add_argument('--norm_first', default=True, type=bool)
     parser.add_argument('--use_action_weight', action='store_true', help='是否使用动作权重')
 
-    # HSTU 相关参数
-    parser.add_argument('--use_hstu', action='store_true', default=True, help='是否使用HSTU架构（默认False）')
-    parser.add_argument('--hstu_attention_dim', type=int, default=None, help='HSTU注意力维度（默认与hidden_units相同）')
-    parser.add_argument('--hstu_linear_dim', type=int, default=None, help='HSTU线性维度（默认与hidden_units相同）')
-    parser.add_argument('--hstu_concat_ua', action='store_true', help='HSTU是否连接u和a（默认False）')
-    parser.add_argument('--hstu_enable_relative_bias', action='store_true', default=True, help='HSTU是否启用相对偏置（默认True）')
-    parser.add_argument('--hstu_num_buckets', type=int, default=128, help='HSTU时间桶数量（默认128）')
-
     # MMemb Feature ID
     parser.add_argument('--mm_emb_id', nargs='+', default=['81'], type=str, choices=[str(s) for s in range(81, 87)])
 
@@ -93,12 +85,6 @@ def get_args():
     parser.add_argument('--time_decay_factor', type=float, default=1.0, help='时间衰减因子')
 
     args = parser.parse_args()
-    
-    # 设置HSTU参数的默认值
-    if args.hstu_attention_dim is None:
-        args.hstu_attention_dim = args.hidden_units
-    if args.hstu_linear_dim is None:
-        args.hstu_linear_dim = args.hidden_units
 
     return args
 
