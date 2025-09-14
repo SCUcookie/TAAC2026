@@ -9,88 +9,8 @@ from tqdm import tqdm
 from dataset import save_emb
 
 
-class RotaryEmbedding(torch.nn.Module):
-    def __init__(self, head_dim, base=10000):
-        super().__init__()
-        assert head_dim % 2 == 0, "head_dim must be even for RoPE"
-        self.head_dim = head_dim
-        inv_freq = 1.0 / (base ** (torch.arange(0, head_dim, 2).float() / head_dim))
-        self.register_buffer("inv_freq", inv_freq, persistent=False)
-
-    def get_cos_sin(self, positions, dtype, device):
-        # positions: [s] 或 [b, s]
-        if positions.dim() == 1:
-            angles = positions[:, None].to(device).float() * self.inv_freq[None, :]
-            cos = angles.cos().to(dtype)[None, None, :, :]  # [1,1,s,d/2]
-            sin = angles.sin().to(dtype)[None, None, :, :]
-        else:
-            angles = positions[..., None].to(device).float() * self.inv_freq[None, None, :]
-            cos = angles.cos().to(dtype)[:, None, :, :]     # [b,1,s,d/2]
-            sin = angles.sin().to(dtype)[:, None, :, :]
-        return cos, sin
-
-    @staticmethod
-    def apply_rotary(x, cos, sin):
-        # x: [b, n, s, d]
-        x1 = x[..., 0::2]
-        x2 = x[..., 1::2]
-        rotated_x1 = x1 * cos - x2 * sin
-        rotated_x2 = x1 * sin + x2 * cos
-        out = torch.empty_like(x)
-        out[..., 0::2] = rotated_x1
-        out[..., 1::2] = rotated_x2
-        return out
 
 
-class SENet(nn.Module):
-    def __init__(self, num_features, feature_dim, reduction_ratio=4):
-
-        super(SENet, self).__init__()
-        self.num_features = num_features
-        self.feature_dim = feature_dim
-
-
-        self.squeeze_avg = nn.AdaptiveAvgPool1d(1)
-        self.squeeze_max = nn.AdaptiveMaxPool1d(1)  # 新增最大池化
-
-        # Excitation操作
-        self.excitation = nn.Sequential(
-            nn.Linear(num_features*2, num_features // reduction_ratio, bias=False),
-            nn.ReLU(inplace=True),
-            nn.Linear(num_features // reduction_ratio, num_features, bias=False),
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        """
-        Args:
-            x: 输入特征 [batch_size, seq_len, num_features, feature_dim]
-        Returns:
-            加权后的特征 [batch_size, seq_len, num_features, feature_dim]
-        """
-        batch_size, seq_len, num_features, feature_dim = x.size()
-
-        # 1. 调整形状以适应 squeeze 操作 [batch_size * seq_len, num_features, feature_dim]
-        x_reshaped = x.view(-1, num_features, feature_dim)
-
-        # 2. Squeeze: 对每个特征进行全局平均池化 [batch_size * seq_len, num_features, 1]
-        squeezed_avg = self.squeeze_avg(x_reshaped)  # [batch*seq, num_feat, 1]
-        squeezed_max = self.squeeze_max(x_reshaped)  # [batch*seq, num_feat, 1]
-        squeezed = torch.cat([squeezed_avg, squeezed_max], dim=1)  # [batch*seq, 2*num_feat, 1]
-
-
-        # 3. Excitation: 计算注意力权重 [batch_size * seq_len, num_features]
-        squeezed = squeezed.view(-1, self.num_features*2)
-        weights = self.excitation(squeezed)
-        weights = weights.view(-1, self.num_features, 1)
-
-        # 4. 特征加权 [batch_size * seq_len, num_features, feature_dim]
-        weighted_features = x_reshaped * weights.expand_as(x_reshaped)
-
-        # 5. 恢复原始形状 [batch_size, seq_len, num_features, feature_dim]
-        weighted_features = weighted_features.view(batch_size, seq_len, num_features, feature_dim)
-
-        return weighted_features
 
 def truncated_normal(x: torch.Tensor, mean: float, std: float) -> torch.Tensor:
     with torch.no_grad():
@@ -114,7 +34,6 @@ class FlashMultiHeadAttention(torch.nn.Module):
         assert hidden_units % num_heads == 0, "hidden_units must be divisible by num_heads"
 
 
-        self.rope = RotaryEmbedding(self.head_dim)
         self.q_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.k_linear = torch.nn.Linear(hidden_units, hidden_units)
         self.v_linear = torch.nn.Linear(hidden_units, hidden_units)
@@ -137,11 +56,6 @@ class FlashMultiHeadAttention(torch.nn.Module):
         K = K.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         V = V.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
-        maxlen = query.shape[1]
-        poss = torch.arange(1, maxlen + 1, device=Q.device).unsqueeze(0).expand(batch_size, -1).clone()
-        cos, sin = self.rope.get_cos_sin(poss, dtype=Q.dtype, device=Q.device)
-        Q = self.rope.apply_rotary(Q, cos, sin)
-        K = self.rope.apply_rotary(K, cos, sin)
 
 
 
@@ -254,8 +168,6 @@ class BaselineModel(torch.nn.Module):
         )
         item_feature_num = len(self.ITEM_SPARSE_FEAT) + 1 + len(self.ITEM_ARRAY_FEAT) + len(self.ITEM_TEMP_TIME_FEAT) - 2 + len(self.ITEM_CONTINUAL_FEAT) + len(self.ITEM_EMB_FEAT)
 
-        self.item_senet = SENet(item_feature_num, args.hidden_units)
-        self.user_senet = SENet(user_feature_num, args.hidden_units)
 
         self.userdnn = torch.nn.Linear(userdim, args.hidden_units)
         self.itemdnn = torch.nn.Linear(itemdim, args.hidden_units)
@@ -477,12 +389,10 @@ class BaselineModel(torch.nn.Module):
         # merge features
         b, s = seq.size(0), seq.size(1)
         item_feats = torch.stack(item_feat_list, dim=2)
-        item_feats = self.item_senet(item_feats)
         all_item_emb = item_feats.view(b, s, -1)
         all_item_emb = self.itemdnn(all_item_emb)
         if include_user:
             user_feats = torch.stack(user_feat_list, dim=2)
-            user_feats = self.user_senet(user_feats)
             all_user_emb = user_feats.view(b, s, -1)
             all_user_emb = self.userdnn(all_user_emb)
             seqs_emb = all_item_emb + all_user_emb

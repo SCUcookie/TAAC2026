@@ -158,7 +158,7 @@ def perform_python_faiss_search():
 
     # 执行搜索
     print("Performing search...")
-    k = 10  # top-k=10
+    k = 100  # top-k=10
     similarities, indices = index.search(query_vectors, k)
 
     # 将索引转换为原始ID
@@ -361,7 +361,7 @@ def infer():
             + " --dataset_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id.u64bin"))  # 候选库ID文件
             + " --query_vector_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "query.fbin"))  # 用户query文件
             + " --result_id_file_path=" + str(Path(os.environ.get("EVAL_RESULT_PATH"), "id100.u64bin"))  # 结果文件
-            + " --query_ann_top_k=10"  # 返回Top-10结果
+            + " --query_ann_top_k=100"  # 返回Top-10结果
             + " --faiss_M=64 --faiss_ef_construction=1280 --query_ef_search=640"  # FAISS参数配置
             + " --faiss_metric_type=0"  # 相似度度量类型（0为内积）
         )
