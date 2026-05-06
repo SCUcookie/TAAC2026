@@ -7,11 +7,29 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 from dataset import MyDataset
 from model import BaselineModel
+from taac2026_schema import is_taac2026_data_dir
+
+
+class NullSummaryWriter:
+    def add_scalar(self, *args, **kwargs):
+        pass
+
+    def close(self):
+        pass
+
+
+def make_summary_writer(log_dir):
+    try:
+        from torch.utils.tensorboard import SummaryWriter
+
+        return SummaryWriter(log_dir)
+    except Exception as exc:
+        print(f"TensorBoard unavailable, continuing without event logging: {exc}")
+        return NullSummaryWriter()
 
 
 def compute_embeddings(model, seq, seq_feat, token_type):
@@ -36,14 +54,14 @@ def get_args():
 
     # Train params
     parser.add_argument('--batch_size', default=256, type=int)
-    parser.add_argument('--lr', default=0.002, type=float)
+    parser.add_argument('--lr', default=0.0015, type=float)
     parser.add_argument('--maxlen', default=101, type=int)
 
     # Baseline Model construction
     parser.add_argument('--hidden_units', default=128, type=int)
     parser.add_argument('--num_blocks', default=8, type=int)
-    parser.add_argument('--num_epochs', default=10, type=int)
-    parser.add_argument('--num_heads', default=16, type=int)
+    parser.add_argument('--num_epochs', default=30, type=int)
+    parser.add_argument('--num_heads', default=8, type=int)
     parser.add_argument('--dropout_rate', default=0.2, type=float)
     parser.add_argument('--l2_emb', default=0.0, type=float)
     parser.add_argument('--device', default='cuda', type=str)
@@ -64,9 +82,10 @@ def get_args():
     parser.add_argument('--label_smoothing', type=float, default=0.0, help='标签平滑参数')
     parser.add_argument('--use_action_weight', action='store_true', help='是否使用动作权重')
 
-    #训练参数相关
-    parser.add_argument('--warmup_steps', default=800, type=int)
+    #训练参数相关 - 基于数据分析优化
+    parser.add_argument('--warmup_steps', default=3914, type=int)  # 增加warmup步数适应大规模数据
     parser.add_argument('--weight_decay', default=0.01, type=float)
+    parser.add_argument('--num_workers', default=min(8, os.cpu_count()), type=int)  # 优化CPU利用率
 
     args = parser.parse_args()
 
@@ -74,19 +93,28 @@ def get_args():
 
 
 if __name__ == '__main__':
+    data_path_for_dispatch = os.environ.get('TRAIN_DATA_PATH')
+    if is_taac2026_data_dir(data_path_for_dispatch):
+        from taac2026_train import main as taac2026_main
+
+        taac2026_main()
+        raise SystemExit(0)
+
     # torch.manual_seed(42)
 
     Path(os.environ.get('TRAIN_LOG_PATH')).mkdir(parents=True, exist_ok=True)
     Path(os.environ.get('TRAIN_TF_EVENTS_PATH')).mkdir(parents=True, exist_ok=True)
     log_file = open(Path(os.environ.get('TRAIN_LOG_PATH'), 'train.log'), 'w')
-    writer = SummaryWriter(os.environ.get('TRAIN_TF_EVENTS_PATH'))
+    writer = make_summary_writer(os.environ.get('TRAIN_TF_EVENTS_PATH'))
     # global dataset
     data_path = os.environ.get('TRAIN_DATA_PATH')
 
     args = get_args()
     dataset = MyDataset(data_path, args)
     train_loader = DataLoader(
-        dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=dataset.collate_fn
+        dataset, batch_size=args.batch_size, shuffle=True, 
+        num_workers=args.num_workers, collate_fn=dataset.collate_fn,
+        pin_memory=True  # 加速GPU内存传输
     )
     usernum, itemnum = dataset.usernum, dataset.itemnum
     feat_statistics, feat_types = dataset.feat_statistics, dataset.feature_types
@@ -174,8 +202,22 @@ if __name__ == '__main__':
 
                 # 记录InfoNCE相关指标
                 with torch.no_grad():
-                    writer.add_scalar("Model/pos_mean_logit", pos_mean_logit, global_step)
-                    writer.add_scalar("Model/neg_mean_logits", neg_mean_logit, global_step)
+                    # 确保指标值有效并记录
+                    if not (np.isnan(pos_mean_logit) or np.isinf(pos_mean_logit)):
+                        writer.add_scalar("Model/pos_mean_logit", pos_mean_logit, global_step)
+                    else:
+                        writer.add_scalar("Model/pos_mean_logit", 0.0, global_step)
+                        print(f"Warning: pos_mean_logit is {pos_mean_logit} at step {global_step}")
+                    
+                    if not (np.isnan(neg_mean_logit) or np.isinf(neg_mean_logit)):
+                        writer.add_scalar("Model/neg_mean_logits", neg_mean_logit, global_step)
+                    else:
+                        writer.add_scalar("Model/neg_mean_logits", 0.0, global_step)
+                        print(f"Warning: neg_mean_logit is {neg_mean_logit} at step {global_step}")
+                    
+                    # 添加额外的调试信息
+                    writer.add_scalar("Model/temperature", model.temp, global_step)
+                    writer.add_scalar("Model/has_valid_negatives", 1.0 if neg_mean_logit != 0.0 else 0.0, global_step)
 
             elif args.loss_type == 'mix':
                 # 混合损失
@@ -197,7 +239,7 @@ if __name__ == '__main__':
                 pos_embs = model.feat2emb(pos, pos_feat, include_user=False)
                 neg_embs = model.feat2emb(neg, neg_feat, include_user=False)
 
-                infonce_loss = model.compute_infonce_loss(seq_embs, pos_embs, neg_embs, loss_mask)
+                infonce_loss, pos_mean_logit, neg_mean_logit = model.compute_infonce_loss(seq_embs, pos_embs, neg_embs, loss_mask)
 
                 # 组合损失
                 loss = bce_loss + args.contrastive_weight * infonce_loss
@@ -206,19 +248,21 @@ if __name__ == '__main__':
                 writer.add_scalar('Loss/train_bce', bce_loss.item(), global_step)
                 writer.add_scalar('Loss/train_infonce', infonce_loss.item(), global_step)
 
-                # 记录InfoNCE相关指标
+                # 记录InfoNCE相关指标（使用准确的统计值）
                 with torch.no_grad():
-                    seq_embs_norm = torch.nn.functional.normalize(seq_embs, p=2, dim=-1)
-                    pos_embs_norm = torch.nn.functional.normalize(pos_embs, p=2, dim=-1)
-                    neg_embs_norm = torch.nn.functional.normalize(neg_embs, p=2, dim=-1)
-
-                    pos_sim = torch.nn.functional.cosine_similarity(seq_embs_norm, pos_embs_norm, dim=-1)
-                    neg_sim = torch.matmul(seq_embs_norm.reshape(-1, seq_embs_norm.size(-1)),
-                                           neg_embs_norm.reshape(-1, neg_embs_norm.size(-1)).transpose(-1, -2))
-
-                    writer.add_scalar("Model/nce_pos_logits", pos_sim[loss_mask.bool()].mean().item(), global_step)
-                    writer.add_scalar("Model/nce_neg_logits", neg_sim.mean().item(), global_step)
-                    writer.add_scalar("Model/temp", model.temp, global_step)
+                    # 使用从compute_infonce_loss返回的准确指标
+                    if not (np.isnan(pos_mean_logit) or np.isinf(pos_mean_logit)):
+                        writer.add_scalar("Model/pos_mean_logit", pos_mean_logit, global_step)
+                    else:
+                        writer.add_scalar("Model/pos_mean_logit", 0.0, global_step)
+                        
+                    if not (np.isnan(neg_mean_logit) or np.isinf(neg_mean_logit)):
+                        writer.add_scalar("Model/neg_mean_logits", neg_mean_logit, global_step)
+                    else:
+                        writer.add_scalar("Model/neg_mean_logits", 0.0, global_step)
+                    
+                    writer.add_scalar("Model/temperature", model.temp, global_step)
+                    writer.add_scalar("Model/has_valid_negatives", 1.0 if neg_mean_logit != 0.0 else 0.0, global_step)
 
             log_json = json.dumps(
                 {'global_step': global_step, 'loss': loss.item(), 'epoch': epoch, 'time': time.time()}

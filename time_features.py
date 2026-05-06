@@ -186,7 +186,7 @@ class TimeFeatureExtractor:
                 "200": int(hours[idx]),              # 小时 (0-23)
                 "201": int(weekdays[idx]),           # 星期 (0-6) 
                 "203": int(log_gap_buckets[idx]),    # 对数时间间隔离散化 (0-99)
-                "204": int(months[idx]),             # 月份 (1-12)
+                # "204": int(months[idx]),             # 月份 (1-12)
                 "205": int(delta_buckets[idx]),      # 时间衰减离散化 (0-99)
                 "206": int(first_gap_buckets[idx]),  # 与序列首元素时间差离散化 (0-99)
                 # "202": int(time_gap[idx])          # 原始时间间隔 (可选)

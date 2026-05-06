@@ -1,0 +1,7 @@
+{
+  "num_predictions": 64,
+  "checkpoint": "test_cache\\taac2026_synth\\ckpt\\taac2026_pcvR.pt",
+  "elapsed_sec": 0.029,
+  "result_json": "test_cache\\taac2026_synth\\result\\result.json",
+  "submission_csv": "test_cache\\taac2026_synth\\result\\submission.csv"
+}

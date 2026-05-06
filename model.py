@@ -210,6 +210,26 @@ class BaselineModel(torch.nn.Module):
 
         self.reset_embeddings()
 
+    def normalize_embeddings(self, embeddings):
+        """
+        统一的L2归一化方法，确保训练和推理一致性
+        
+        Args:
+            embeddings: torch.Tensor 或 np.ndarray
+            
+        Returns:
+            归一化后的embedding，类型与输入保持一致
+        """
+        if isinstance(embeddings, torch.Tensor):
+            return F.normalize(embeddings, p=2, dim=-1)
+        elif isinstance(embeddings, np.ndarray):
+            # 使用PyTorch的算法逻辑保证一致性
+            tensor = torch.from_numpy(embeddings).to(self.dev)
+            normalized = F.normalize(tensor, p=2, dim=-1)
+            return normalized.cpu().numpy()
+        else:
+            raise TypeError(f"Unsupported embedding type: {type(embeddings)}")
+
     def reset_embeddings(self) -> None:
         for name, params in self.named_parameters():
             if "item_emb" in name:
@@ -487,13 +507,13 @@ class BaselineModel(torch.nn.Module):
 
         final_feat = log_feats[:, -1, :]
 
-        # 如果启用了输出归一化，对最终特征进行L2归一化
+        # 如果启用了输出归一化，使用统一的归一化方法
         if self.norm_output:
-            final_feat = F.normalize(final_feat, p=2, dim=-1)
+            final_feat = self.normalize_embeddings(final_feat)
 
         return final_feat
 
-    def save_item_emb(self, item_ids, retrieval_ids, feat_dict, save_path, batch_size=1024):
+    def save_item_emb(self, item_ids, retrieval_ids, feat_dict, save_path, batch_size=2048):
         """
         生成候选库item embedding，用于检索
 
@@ -602,9 +622,9 @@ class BaselineModel(torch.nn.Module):
         final_ids = np.array(retrieval_ids, dtype=np.uint64).reshape(-1, 1)
         final_embs = np.concatenate(all_embs, axis=0)
 
-        # 如果启用了输出归一化，对embedding进行L2归一化
+        # 如果启用了输出归一化，使用统一的归一化方法确保一致性
         if self.norm_output:
-            final_embs = final_embs / (np.linalg.norm(final_embs, axis=1, keepdims=True) + 1e-8)
+            final_embs = self.normalize_embeddings(final_embs)
 
         save_emb(final_embs, Path(save_path, 'embedding.fbin'))
         save_emb(final_ids, Path(save_path, 'id.u64bin'))
@@ -622,10 +642,10 @@ class BaselineModel(torch.nn.Module):
         Returns:
             loss: InfoNCE损失值
         """
-        # 对embedding进行L2归一化
-        seq_embs = F.normalize(seq_embs, p=2, dim=-1)
-        pos_embs = F.normalize(pos_embs, p=2, dim=-1)
-        neg_embs = F.normalize(neg_embs, p=2, dim=-1)
+        # 使用统一的归一化方法确保一致性
+        seq_embs = self.normalize_embeddings(seq_embs)
+        pos_embs = self.normalize_embeddings(pos_embs)
+        neg_embs = self.normalize_embeddings(neg_embs)
 
         # 计算正样本的余弦相似度
         pos_logits = F.cosine_similarity(seq_embs, pos_embs, dim=-1).unsqueeze(-1)
@@ -646,6 +666,11 @@ class BaselineModel(torch.nn.Module):
 
         # 计算负样本相似度（只在有效位置之间）
         neg_logits = torch.matmul(valid_seq_embs, valid_neg_embs.transpose(-1, -2))  # [num_valid, num_valid]
+        
+        # 过滤无效负样本：排除与正样本相同或padding值0的情况
+        # 创建掩码来排除对角线（自己与自己的相似度）
+        mask = torch.eye(neg_logits.size(0), device=neg_logits.device).bool()
+        neg_logits = neg_logits.masked_fill(mask, float('-inf'))  # 将对角线设为负无穷
         # 初始化负样本张量（避免未定义错误）
         hard_neg_logits = torch.tensor([], device=neg_logits.device)
         easy_neg_logits = torch.tensor([], device=neg_logits.device)
@@ -694,10 +719,12 @@ class BaselineModel(torch.nn.Module):
 
         # 4. 拼接正负样本logits（确保有负样本）
         if combined_neg_logits.numel() == 0:
-            # 无负样本时，可返回0损失或调整策略
-            logits = valid_pos_logits
+            # 无负样本时，返回极小损失值，避免维度不匹配
+            pos_mean = valid_pos_logits.mean().item() if valid_pos_logits.numel() > 0 else 0.0
+            return torch.tensor(1e-8, device=seq_embs.device, requires_grad=True), pos_mean, 0.0
         else:
             logits = torch.cat([valid_pos_logits, combined_neg_logits], dim=-1)
+        
         # 应用温度系数
         logits = logits / self.temp
 
@@ -707,4 +734,11 @@ class BaselineModel(torch.nn.Module):
         # 计算交叉熵损失
         loss = F.cross_entropy(logits, labels)
 
-        return loss, valid_pos_logits.mean().item(), neg_logits.mean().item()
+        # 安全计算统计值，处理-inf情况
+        pos_mean = valid_pos_logits.mean().item() if valid_pos_logits.numel() > 0 else 0.0
+        
+        # 过滤-inf值后计算负样本均值
+        finite_neg_logits = neg_logits[torch.isfinite(neg_logits)]
+        neg_mean = finite_neg_logits.mean().item() if finite_neg_logits.numel() > 0 else 0.0
+
+        return loss, pos_mean, neg_mean
