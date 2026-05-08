@@ -35,7 +35,7 @@ class PCVRHyFormerRankingTrainer:
     - seq_a, seq_b, seq_c, seq_d (each with *_len companion)
     - label (binary)
 
-    Loss: BCEWithLogitsLoss or Focal Loss.
+    Loss: BCEWithLogitsLoss, Focal Loss, or BCE plus sampled pairwise AUC loss.
     Metrics: BinaryAUROC + binary logloss.
     """
 
@@ -52,6 +52,8 @@ class PCVRHyFormerRankingTrainer:
         loss_type: str = 'bce',
         focal_alpha: float = 0.1,
         focal_gamma: float = 2.0,
+        pairwise_auc_weight: float = 0.05,
+        pairwise_max_pairs: int = 8192,
         sparse_lr: float = 0.05,
         sparse_weight_decay: float = 0.0,
         reinit_sparse_after_epoch: int = 1,
@@ -104,6 +106,8 @@ class PCVRHyFormerRankingTrainer:
         self.loss_type: str = loss_type
         self.focal_alpha: float = focal_alpha
         self.focal_gamma: float = focal_gamma
+        self.pairwise_auc_weight: float = pairwise_auc_weight
+        self.pairwise_max_pairs: int = pairwise_max_pairs
         self.reinit_sparse_after_epoch: int = reinit_sparse_after_epoch
         self.reinit_cardinality_threshold: int = reinit_cardinality_threshold
         self.sparse_lr: float = sparse_lr
@@ -114,7 +118,24 @@ class PCVRHyFormerRankingTrainer:
 
         logging.info(f"PCVRHyFormerRankingTrainer loss_type={loss_type}, "
                      f"focal_alpha={focal_alpha}, focal_gamma={focal_gamma}, "
+                     f"pairwise_auc_weight={pairwise_auc_weight}, "
+                     f"pairwise_max_pairs={pairwise_max_pairs}, "
                      f"reinit_sparse_after_epoch={reinit_sparse_after_epoch}")
+
+    def _pairwise_auc_loss(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        positives = logits[labels > 0.5]
+        negatives = logits[labels <= 0.5]
+        if positives.numel() == 0 or negatives.numel() == 0:
+            return logits.new_zeros(())
+
+        num_pairs = positives.numel() * negatives.numel()
+        if self.pairwise_max_pairs > 0 and num_pairs > self.pairwise_max_pairs:
+            pos_idx = torch.randint(positives.numel(), (self.pairwise_max_pairs,), device=logits.device)
+            neg_idx = torch.randint(negatives.numel(), (self.pairwise_max_pairs,), device=logits.device)
+            diffs = positives[pos_idx] - negatives[neg_idx]
+        else:
+            diffs = positives[:, None] - negatives[None, :]
+        return F.softplus(-diffs).mean()
 
     def _build_step_dir_name(self, global_step: int, is_best: bool = False) -> str:
         """Build a checkpoint sub-directory name such as
@@ -418,6 +439,10 @@ class PCVRHyFormerRankingTrainer:
 
         if self.loss_type == 'focal':
             loss = sigmoid_focal_loss(logits, label, alpha=self.focal_alpha, gamma=self.focal_gamma)
+        elif self.loss_type == 'bce_pairwise':
+            bce_loss = F.binary_cross_entropy_with_logits(logits, label)
+            pair_loss = self._pairwise_auc_loss(logits, label)
+            loss = bce_loss + self.pairwise_auc_weight * pair_loss
         else:
             loss = F.binary_cross_entropy_with_logits(logits, label)
         loss.backward()

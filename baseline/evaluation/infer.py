@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import math
+import sys
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
@@ -12,6 +13,11 @@ from typing import Any, Dict, List, Tuple
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
+
+_THIS_DIR = Path(__file__).resolve().parent
+_TRAINING_DIR = _THIS_DIR.parent / "training"
+if str(_TRAINING_DIR) not in sys.path:
+    sys.path.append(str(_TRAINING_DIR))
 
 try:
     from .dataset import FeatureSchema, NUM_TIME_BUCKETS, PCVRParquetDataset
@@ -238,8 +244,22 @@ def print_platform_event(name: str, payload: Dict[str, Any]) -> None:
     print(f"PLATFORM_{name} {json.dumps(payload, ensure_ascii=False, sort_keys=True)}", flush=True)
 
 
+def compact_file_status(path: Path) -> Dict[str, Any]:
+    return {
+        "path": str(path),
+        "exists": path.exists(),
+        "size_bytes": path.stat().st_size if path.exists() else 0,
+    }
+
+
 def infer() -> Dict[str, Any]:
     args = parse_args()
+    print_platform_event("INFER_START", {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "cwd": os.getcwd(),
+        "torch_version": torch.__version__,
+        "cuda_available": torch.cuda.is_available(),
+    })
     if not args.eval_data_dir:
         raise ValueError("EVAL_DATA_PATH or --eval_data_dir is required")
 
@@ -248,6 +268,12 @@ def infer() -> Dict[str, Any]:
     schema_path = resolve_schema_path(args, ckpt_dir)
     train_cfg = load_train_config(ckpt_dir)
     device = torch.device(args.device)
+    print_platform_event("CHECKPOINT_STATUS", {
+        "checkpoint_dir": str(ckpt_dir),
+        "model_file": compact_file_status(ckpt_dir / "model.pt"),
+        "schema_file": compact_file_status(schema_path),
+        "train_config_file": compact_file_status(ckpt_dir / "train_config.json"),
+    })
 
     result_dir.mkdir(parents=True, exist_ok=True)
     create_logger(str(result_dir / "infer.log"))
@@ -296,6 +322,8 @@ def infer() -> Dict[str, Any]:
     )
     print_platform_event("DATASET_CONFIG", {
         "batch_size": batch_size,
+        "num_rows_estimate": getattr(dataset, "num_rows", None),
+        "num_row_groups": len(getattr(dataset, "_rg_list", [])),
         "seq_domains": dataset.seq_domains,
         "seq_max_lens": seq_max_lens,
         "user_int_features": len(dataset.user_int_schema.entries),
@@ -339,10 +367,16 @@ def infer() -> Dict[str, Any]:
     state_dict = torch.load(ckpt_dir / "model.pt", map_location=device)
     model.load_state_dict(state_dict, strict=True)
     model.eval()
+    print_platform_event("MODEL_READY", {
+        "num_parameters": int(sum(p.numel() for p in model.parameters())),
+        "num_ns": getattr(model, "num_ns", None),
+        "device": str(device),
+    })
 
     all_user_ids: List[str] = []
     scores: List[float] = []
     start = time.time()
+    first_batch_event = False
     with torch.no_grad():
         for batch in loader:
             batch = move_batch_to_device(batch, device)
@@ -352,6 +386,13 @@ def infer() -> Dict[str, Any]:
             user_ids = batch.get("user_id", [""] * len(batch_scores))
             scores.extend(batch_scores)
             all_user_ids.extend(str(user_id) for user_id in user_ids)
+            if not first_batch_event:
+                print_platform_event("FIRST_BATCH", {
+                    "batch_predictions": len(batch_scores),
+                    "sample_user_ids": [str(x) for x in user_ids[:5]],
+                    "sample_scores": [round(float(x), 8) for x in batch_scores[:5]],
+                })
+                first_batch_event = True
 
     if len(all_user_ids) != len(scores):
         raise RuntimeError(
@@ -364,15 +405,23 @@ def infer() -> Dict[str, Any]:
 
     write_outputs(result_dir, all_user_ids, scores, args.output_name)
     stats = score_stats(scores)
+    result_json = result_dir / args.output_name
+    submission_csv = result_dir / "submission.csv"
+    scores_npy = result_dir / "scores.npy"
     summary = {
         "num_predictions": len(scores),
         "num_unique_user_ids": len(set(all_user_ids)),
         "checkpoint_dir": str(ckpt_dir),
         "elapsed_sec": round(time.time() - start, 3),
         "output_shape": "predictions_dict_user_id_to_float",
-        "result_json": str(result_dir / args.output_name),
-        "submission_csv": str(result_dir / "submission.csv"),
-        "scores_npy": str(result_dir / "scores.npy"),
+        "result_json": str(result_json),
+        "submission_csv": str(submission_csv),
+        "scores_npy": str(scores_npy),
+        "result_files": {
+            "json": compact_file_status(result_json),
+            "csv": compact_file_status(submission_csv),
+            "scores": compact_file_status(scores_npy),
+        },
         "score_stats": stats,
     }
     (result_dir / "inference_summary.json").write_text(

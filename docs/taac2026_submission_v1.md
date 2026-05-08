@@ -51,13 +51,13 @@ Use this before spending a platform evaluation slot when the eval split has labe
 export EVAL_DATA_PATH=/path/to/taac2026/labeled_eval
 export MODEL_OUTPUT_PATH=./ckpt
 export EVAL_RESULT_PATH=./eval_result
-python taac2026_eval.py --experiment_name taac2026-tail-pairwise
+python baseline/evaluation/local_eval.py --experiment_name baseline-local-eval
 ```
 
 Outputs:
 
-- `labeled_result.json`: platform-shaped predictions for inspection.
-- `labeled_eval_summary.json`: AUC, accuracy, logloss, threshold, and score distribution.
+- `labeled_predictions.json`: platform-shaped predictions for inspection.
+- `local_eval_summary.json`: AUC, accuracy, logloss, threshold, and score distribution.
 - `feedbacks/records/YYYY-MM-DD_HHMM_*.md`: feedback log for the run.
 
 ## Inference

@@ -6,6 +6,13 @@ This is the only prompt file that needs to be read first.
 
 Your job is to help operate this repository for TAAC2026 experiments.
 
+Important current status:
+
+- The `baseline/` split is already confirmed to run successfully.
+- That baseline has produced one trained model and one successful evaluation result with score `0.8133`.
+- The active goal is not baseline setup. The active goal is to modify the model training code and evaluation method to beat `0.8133`.
+- Treat `0.8133` as the current benchmark until a newer feedback record says otherwise.
+
 The workflow is:
 
 1. Train a model from the user-provided training code.
@@ -36,6 +43,9 @@ The workflow is:
 - `baseline/training/`: training-only baseline copy.
 - `baseline/evaluation/`: evaluation-only baseline copy.
 - `baseline/README.md`: pointer for the split.
+- Current known baseline status: one trained model and one evaluation result, score `0.8133`.
+- Active code changes should happen under `baseline/training/` and `baseline/evaluation/`.
+- Treat root-level Python files as compatibility wrappers or legacy code unless the user explicitly asks to change them.
 
 ### Planning and process
 
@@ -52,7 +62,9 @@ The workflow is:
 ## 4. How To Work
 
 - Keep training code and evaluation code separate.
-- Prefer the baseline split folders when reasoning about those two workflows.
+- Make all new model and evaluation operations under the baseline split folders.
+- Use `baseline/training/` for model/training changes.
+- Use `baseline/evaluation/` for inference/evaluation-method changes.
 - Keep documentation in English.
 - Make the directory layout easy to scan.
 - Record every meaningful run in chronological order.
@@ -108,6 +120,8 @@ Use the filename pattern `YYYY-MM-DD_HHMM_short-title.md`.
 
 ## 9. Current Experiment Discipline
 
+- Do not spend time re-proving that the baseline runs; it already has a successful model and evaluation.
+- Every model or evaluation change should be judged against the `0.8133` baseline score.
 - Keep the baseline architecture stable unless a small change clearly improves validation.
 - Treat sequence truncation as the first experiment axis.
 - Favor short runs before long ones.

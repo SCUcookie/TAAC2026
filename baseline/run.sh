@@ -18,8 +18,10 @@ NUM_HEADS="${NUM_HEADS:-4}"
 SEQ_ENCODER_TYPE="${SEQ_ENCODER_TYPE:-transformer}"
 LOSS_TYPE="${LOSS_TYPE:-bce}"
 BATCH_SIZE="${BATCH_SIZE:-256}"
+PAIRWISE_AUC_WEIGHT="${PAIRWISE_AUC_WEIGHT:-0.05}"
+PAIRWISE_MAX_PAIRS="${PAIRWISE_MAX_PAIRS:-8192}"
 
-echo "PLATFORM_TRAIN_CONFIG {\"ns_tokenizer_type\":\"${NS_TOKENIZER_TYPE}\",\"user_ns_tokens\":${USER_NS_TOKENS},\"item_ns_tokens\":${ITEM_NS_TOKENS},\"num_queries\":${NUM_QUERIES},\"ns_groups_json\":\"${NS_GROUPS_JSON}\",\"emb_skip_threshold\":${EMB_SKIP_THRESHOLD},\"num_workers\":${NUM_WORKERS},\"seq_max_lens\":\"${SEQ_MAX_LENS}\",\"d_model\":${D_MODEL},\"num_hyformer_blocks\":${NUM_HYFORMER_BLOCKS},\"num_heads\":${NUM_HEADS},\"seq_encoder_type\":\"${SEQ_ENCODER_TYPE}\",\"loss_type\":\"${LOSS_TYPE}\",\"batch_size\":${BATCH_SIZE}}"
+echo "PLATFORM_TRAIN_CONFIG {\"ns_tokenizer_type\":\"${NS_TOKENIZER_TYPE}\",\"user_ns_tokens\":${USER_NS_TOKENS},\"item_ns_tokens\":${ITEM_NS_TOKENS},\"num_queries\":${NUM_QUERIES},\"ns_groups_json\":\"${NS_GROUPS_JSON}\",\"emb_skip_threshold\":${EMB_SKIP_THRESHOLD},\"num_workers\":${NUM_WORKERS},\"seq_max_lens\":\"${SEQ_MAX_LENS}\",\"d_model\":${D_MODEL},\"num_hyformer_blocks\":${NUM_HYFORMER_BLOCKS},\"num_heads\":${NUM_HEADS},\"seq_encoder_type\":\"${SEQ_ENCODER_TYPE}\",\"loss_type\":\"${LOSS_TYPE}\",\"batch_size\":${BATCH_SIZE},\"pairwise_auc_weight\":${PAIRWISE_AUC_WEIGHT},\"pairwise_max_pairs\":${PAIRWISE_MAX_PAIRS}}"
 
 python3 -u "${SCRIPT_DIR}/train.py" \
     --ns_tokenizer_type "${NS_TOKENIZER_TYPE}" \
@@ -35,6 +37,8 @@ python3 -u "${SCRIPT_DIR}/train.py" \
     --num_heads "${NUM_HEADS}" \
     --seq_encoder_type "${SEQ_ENCODER_TYPE}" \
     --loss_type "${LOSS_TYPE}" \
+    --pairwise_auc_weight "${PAIRWISE_AUC_WEIGHT}" \
+    --pairwise_max_pairs "${PAIRWISE_MAX_PAIRS}" \
     --batch_size "${BATCH_SIZE}" \
     "$@"
 
