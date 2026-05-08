@@ -10,14 +10,15 @@ This repository now supports the 2026 flat pCVR/AUC task in a separate path whil
 
 ## Model
 
-The first version is a compact single-model scorer:
+The first version now follows the public description of the official 2026 baseline, PCVRHyFormer:
 
-- scalar categorical fields, multi-value fields, and sequence fields are hashed into per-field tokens;
-- dense/list<float> fields are averaged into field tokens;
-- time columns are encoded with hour/weekday sinusoidal features and label-time/timestamp gap;
-- all tokens are processed by a small Transformer encoder, then an MLP outputs one pCVR logit.
+- `ns_groups.json`-style non-sequential feature groups are built from user, item, id, dense, and time fields;
+- the four domain sequence families are encoded separately with `LongerEncoder` blocks;
+- a learned multi-sequence query fuses domain summaries;
+- HyFormer blocks jointly mix non-sequential tokens, sequence summaries, and time tokens;
+- RankMixer-style interaction features feed the final pCVR head.
 
-This follows the competition direction of a unified block over non-sequential and sequential tokens, but keeps the model small enough for the official latency constraint.
+This keeps the official-baseline shape while using hashing so the first version can run without a full vocabulary-building pass.
 
 ## Training
 
@@ -35,6 +36,29 @@ Useful knobs:
 - `HIDDEN_UNITS=128`
 - `NUM_BLOCKS=2`
 - `NUM_HEADS=4`
+- `SEQ_LEN=48`
+- `VAL_STRATEGY=tail`
+- `PAIRWISE_AUC_WEIGHT=0.05`
+- `FOCAL_GAMMA=0.0`
+
+The current candidate training recipe keeps the baseline architecture stable, increases the sequence window to 48, validates on a held-out tail window, and adds a small pairwise AUC-ranking loss on top of BCE.
+
+## Local Labeled Evaluation
+
+Use this before spending a platform evaluation slot when the eval split has labels:
+
+```bash
+export EVAL_DATA_PATH=/path/to/taac2026/labeled_eval
+export MODEL_OUTPUT_PATH=./ckpt
+export EVAL_RESULT_PATH=./eval_result
+python taac2026_eval.py --experiment_name taac2026-tail-pairwise
+```
+
+Outputs:
+
+- `labeled_result.json`: platform-shaped predictions for inspection.
+- `labeled_eval_summary.json`: AUC, accuracy, logloss, threshold, and score distribution.
+- `feedbacks/records/YYYY-MM-DD_HHMM_*.md`: feedback log for the run.
 
 ## Inference
 
@@ -47,9 +71,9 @@ python infer.py
 
 Outputs:
 
-- `result.json`: JSON payload with `predictions`;
-- `submission.csv`: `user_id,item_id,score`;
-- `scores.npy`: raw float32 scores;
-- `inference_summary.json`: count, checkpoint, and timing summary.
+- `predictions.json`: platform-required JSON payload with `predictions`.
+- `submission.csv`: optional local helper output when `--write_aux_outputs` is enabled.
+- `scores.npy`: optional local helper output when `--write_aux_outputs` is enabled.
+- `inference_summary.json`: optional local helper output when `--write_aux_outputs` is enabled.
 
-If the official platform expects a different filename or JSON key, change `--output_name` or `write_outputs()` in `taac2026_infer.py`.
+Before spending an evaluation slot, run local inference once and validate the output shape with `submission/taac2026_baseline_v1/verify_infer.py`.

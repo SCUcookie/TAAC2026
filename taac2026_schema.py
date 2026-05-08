@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -70,21 +71,49 @@ EXPECTED_LIST_COLUMNS = [
 ]
 EXPECTED_DENSE_COLUMNS = [user_dense_col(i) for i in USER_DENSE_IDS]
 
+DEFAULT_NS_GROUPS = {
+    "id": ["user_id", "item_id"],
+    "user_scalar": [user_int_col(i) for i in USER_INT_SCALAR_IDS],
+    "user_list": [user_int_col(i) for i in USER_INT_LIST_IDS],
+    "user_dense": [user_dense_col(i) for i in USER_DENSE_IDS],
+    "item_scalar": [item_int_col(i) for i in ITEM_INT_SCALAR_IDS],
+    "item_list": [item_int_col(i) for i in ITEM_INT_LIST_IDS],
+    "time": ["__time__"],
+}
+
+DOMAIN_GROUPS = {
+    "domain_a": [domain_seq_col(i) for i in range(38, 47)],
+    "domain_b": [domain_seq_col(i) for i in [*range(67, 80), 88]],
+    "domain_c": [domain_seq_col(i) for i in [*range(27, 38), 47]],
+    "domain_d": [domain_seq_col(i) for i in range(17, 27)],
+}
+
 
 @dataclass
 class TAACFeatureConfig:
     scalar_columns: list[str]
     list_columns: list[str]
     dense_columns: list[str]
+    sequence_columns: list[str]
+    ns_groups: dict[str, list[str]]
+    seq_groups: dict[str, list[str]]
     label_column: str | None = None
 
     @property
     def cat_columns(self) -> list[str]:
-        return self.scalar_columns + self.list_columns
+        return self.scalar_columns + self.list_columns + self.sequence_columns
 
     @property
     def token_fields(self) -> list[str]:
-        return self.scalar_columns + self.list_columns + self.dense_columns + ["__time__"]
+        return list(self.ns_groups) + list(self.seq_groups)
+
+    @property
+    def ns_token_count(self) -> int:
+        return len(self.ns_groups)
+
+    @property
+    def seq_token_count(self) -> int:
+        return len(self.seq_groups)
 
     @property
     def model_config(self) -> dict:
@@ -92,6 +121,9 @@ class TAACFeatureConfig:
             "scalar_columns": self.scalar_columns,
             "list_columns": self.list_columns,
             "dense_columns": self.dense_columns,
+            "sequence_columns": self.sequence_columns,
+            "ns_groups": self.ns_groups,
+            "seq_groups": self.seq_groups,
             "label_column": self.label_column,
         }
 
@@ -101,6 +133,9 @@ class TAACFeatureConfig:
             scalar_columns=list(data.get("scalar_columns", [])),
             list_columns=list(data.get("list_columns", [])),
             dense_columns=list(data.get("dense_columns", [])),
+            sequence_columns=list(data.get("sequence_columns", [])),
+            ns_groups={k: list(v) for k, v in data.get("ns_groups", {}).items()},
+            seq_groups={k: list(v) for k, v in data.get("seq_groups", {}).items()},
             label_column=data.get("label_column"),
         )
 
@@ -142,19 +177,46 @@ def read_parquet_columns(path: str | Path) -> list[str]:
 def build_feature_config(available_columns: Iterable[str]) -> TAACFeatureConfig:
     available = set(available_columns)
     label_column = next((col for col in LABEL_COLUMNS if col in available), None)
+    scalar_columns = [col for col in EXPECTED_CAT_SCALAR_COLUMNS if col in available]
+    list_columns = [
+        col
+        for col in [*[user_int_col(i) for i in USER_INT_LIST_IDS], *[item_int_col(i) for i in ITEM_INT_LIST_IDS]]
+        if col in available
+    ]
+    sequence_columns = [col for col in [domain_seq_col(i) for i in DOMAIN_SEQUENCE_IDS] if col in available]
+    dense_columns = [col for col in EXPECTED_DENSE_COLUMNS if col in available]
+
+    ns_groups = {
+        group_name: [col for col in cols if col in available or col == "__time__"]
+        for group_name, cols in DEFAULT_NS_GROUPS.items()
+    }
+    ns_groups = {group_name: cols for group_name, cols in ns_groups.items() if cols}
+    seq_groups = {
+        group_name: [col for col in cols if col in available]
+        for group_name, cols in DOMAIN_GROUPS.items()
+    }
+    seq_groups = {group_name: cols for group_name, cols in seq_groups.items() if cols}
+
     return TAACFeatureConfig(
-        scalar_columns=[col for col in EXPECTED_CAT_SCALAR_COLUMNS if col in available],
-        list_columns=[col for col in EXPECTED_LIST_COLUMNS if col in available],
-        dense_columns=[col for col in EXPECTED_DENSE_COLUMNS if col in available],
+        scalar_columns=scalar_columns,
+        list_columns=list_columns,
+        dense_columns=dense_columns,
+        sequence_columns=sequence_columns,
+        ns_groups=ns_groups,
+        seq_groups=seq_groups,
         label_column=label_column,
     )
 
 
 def required_columns(config: TAACFeatureConfig, include_label: bool) -> list[str]:
-    cols = [*config.scalar_columns, *config.list_columns, *config.dense_columns]
+    cols = [*config.scalar_columns, *config.list_columns, *config.sequence_columns, *config.dense_columns]
     for col in TIME_COLUMNS:
         if col not in cols:
             cols.append(col)
     if include_label and config.label_column and config.label_column not in cols:
         cols.append(config.label_column)
     return cols
+
+
+def dump_ns_groups(config: TAACFeatureConfig, path: str | Path) -> None:
+    Path(path).write_text(json.dumps(config.ns_groups, indent=2, ensure_ascii=False), encoding="utf-8")

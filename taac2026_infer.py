@@ -10,7 +10,7 @@ import numpy as np
 import torch
 
 from taac2026_data import TAAC2026Batcher, move_batch_to_device
-from taac2026_model import TAAC2026Scorer
+from taac2026_model import PCVRHyFormer
 from taac2026_schema import TAACFeatureConfig
 
 
@@ -37,16 +37,14 @@ def find_checkpoint(model_dir: str | Path | None) -> Path:
     return candidates[-1]
 
 
-def _load_model(ckpt_path: Path, device: torch.device) -> tuple[TAAC2026Scorer, TAACFeatureConfig, dict]:
+def _load_model(ckpt_path: Path, device: torch.device) -> tuple[PCVRHyFormer, TAACFeatureConfig, dict]:
     ckpt = torch.load(ckpt_path, map_location=device)
     config = TAACFeatureConfig.from_dict(ckpt["feature_config"])
     saved_args = ckpt.get("args", {})
-    model = TAAC2026Scorer(
-        num_cat_fields=len(config.cat_columns),
-        num_dense_fields=len(config.dense_columns),
-        num_token_fields=len(config.token_fields),
+    model = PCVRHyFormer(
+        num_ns_groups=config.ns_token_count,
+        num_seq_domains=config.seq_token_count,
         hash_size=int(saved_args.get("hash_size", 200_000)),
-        dense_hash_size=int(saved_args.get("dense_hash_size", 4_096)),
         hidden_dim=int(saved_args.get("hidden_units", 128)),
         num_layers=int(saved_args.get("num_blocks", 2)),
         num_heads=int(saved_args.get("num_heads", 4)),
@@ -101,6 +99,7 @@ def infer(argv: list[str] | None = None) -> dict:
         hash_size=hash_size,
         batch_size=args.batch_size,
         include_label=False,
+        seq_len=int(saved_args.get("seq_len", 32)),
     )
 
     scores: list[float] = []
@@ -110,9 +109,10 @@ def infer(argv: list[str] | None = None) -> dict:
         for batch in batcher:
             batch = move_batch_to_device(batch, device)
             logits = model(
-                batch["cat_tokens"],
-                batch["dense_values"],
-                batch["dense_mask"],
+                batch["ns_tokens"],
+                batch["ns_dense"],
+                batch["seq_tokens"],
+                batch["seq_mask"],
                 batch["time_features"],
             )
             batch_scores = torch.sigmoid(logits).detach().cpu().numpy().astype(float).tolist()

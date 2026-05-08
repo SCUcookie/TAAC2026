@@ -15,4 +15,8 @@ python -u main.py \
   --hidden_units "${HIDDEN_UNITS:-128}" \
   --num_blocks "${NUM_BLOCKS:-2}" \
   --num_heads "${NUM_HEADS:-4}" \
-  --max_train_batches "${MAX_TRAIN_BATCHES:-6000}"
+  --max_train_batches "${MAX_TRAIN_BATCHES:-6000}" \
+  --val_strategy "${VAL_STRATEGY:-tail}" \
+  --seq_len "${SEQ_LEN:-48}" \
+  --pairwise_auc_weight "${PAIRWISE_AUC_WEIGHT:-0.05}" \
+  --focal_gamma "${FOCAL_GAMMA:-0.0}"

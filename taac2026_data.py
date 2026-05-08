@@ -36,10 +36,10 @@ def _is_missing(value: object) -> bool:
 def _as_list(value: object) -> list:
     if _is_missing(value):
         return []
-    if isinstance(value, np.ndarray):
-        return value.tolist()
     if hasattr(value, "as_py"):
         value = value.as_py()
+    if isinstance(value, np.ndarray):
+        return value.tolist()
     if isinstance(value, (list, tuple)):
         return list(value)
     return [value]
@@ -55,9 +55,7 @@ def _numeric_value(value: object) -> float:
         out = float(value)
     except (TypeError, ValueError):
         out = 0.0
-    if math.isfinite(out):
-        return out
-    return 0.0
+    return out if math.isfinite(out) else 0.0
 
 
 def build_time_features(rows: dict[str, object], size: int) -> np.ndarray:
@@ -88,6 +86,8 @@ def build_time_features(rows: dict[str, object], size: int) -> np.ndarray:
 
 
 class TAAC2026Batcher:
+    """Streaming Parquet loader shaped like the official PCVRHyFormer baseline."""
+
     def __init__(
         self,
         data_path: str | Path,
@@ -95,6 +95,7 @@ class TAAC2026Batcher:
         hash_size: int,
         batch_size: int,
         include_label: bool,
+        seq_len: int = 32,
     ) -> None:
         self.files = find_parquet_files(data_path)
         if not self.files:
@@ -103,6 +104,7 @@ class TAAC2026Batcher:
         self.hash_size = hash_size
         self.batch_size = batch_size
         self.include_label = include_label
+        self.seq_len = seq_len
         self.columns = required_columns(config, include_label)
 
     def __iter__(self) -> Iterator[dict[str, torch.Tensor | list]]:
@@ -110,45 +112,70 @@ class TAAC2026Batcher:
             parquet_file = pq.ParquetFile(file_path)
             columns = [c for c in self.columns if c in parquet_file.schema_arrow.names]
             for record_batch in parquet_file.iter_batches(batch_size=self.batch_size, columns=columns):
-                table = record_batch.to_pydict()
-                size = record_batch.num_rows
-                yield self._convert_batch(table, size)
+                rows = record_batch.to_pydict()
+                yield self._convert_batch(rows, record_batch.num_rows)
+
+    def _column_token(self, col: str, value: object) -> int:
+        values = _as_list(value)
+        if not values:
+            return 0
+        hashes = [stable_hash(f"{col}={v}", self.hash_size) for v in values]
+        return max(hashes) if hashes else 0
 
     def _convert_batch(self, rows: dict[str, list], size: int) -> dict[str, torch.Tensor | list]:
-        cat = np.zeros((size, len(self.config.cat_columns)), dtype=np.int64)
-        for col_idx, col in enumerate(self.config.scalar_columns):
-            values = rows.get(col)
-            if values is None:
-                continue
-            for row_idx, value in enumerate(values):
-                cat[row_idx, col_idx] = stable_hash(f"{col}={value}", self.hash_size)
+        ns_tokens = np.zeros((size, self.config.ns_token_count), dtype=np.int64)
+        ns_dense = np.zeros((size, self.config.ns_token_count), dtype=np.float32)
+        time_features = build_time_features(rows, size)
 
-        offset = len(self.config.scalar_columns)
-        for list_idx, col in enumerate(self.config.list_columns):
-            values = rows.get(col)
-            if values is None:
-                continue
-            for row_idx, value in enumerate(values):
-                hashed = [stable_hash(f"{col}={v}", self.hash_size) for v in _as_list(value)]
-                cat[row_idx, offset + list_idx] = max(hashed) if hashed else 0
+        for group_idx, (group_name, columns) in enumerate(self.config.ns_groups.items()):
+            for row_idx in range(size):
+                cat_hashes = []
+                dense_values = []
+                for col in columns:
+                    if col == "__time__":
+                        dense_values.extend(time_features[row_idx].tolist())
+                        continue
+                    values = rows.get(col)
+                    if values is None:
+                        continue
+                    value = values[row_idx]
+                    if col in self.config.dense_columns:
+                        dense_values.append(_numeric_value(value))
+                    else:
+                        token = self._column_token(col, value)
+                        if token:
+                            cat_hashes.append(token)
+                if cat_hashes:
+                    ns_tokens[row_idx, group_idx] = max(cat_hashes)
+                if dense_values:
+                    ns_dense[row_idx, group_idx] = float(np.mean(dense_values))
 
-        dense = np.zeros((size, len(self.config.dense_columns)), dtype=np.float32)
-        dense_mask = np.zeros_like(dense, dtype=np.bool_)
-        for col_idx, col in enumerate(self.config.dense_columns):
-            values = rows.get(col)
-            if values is None:
-                continue
-            for row_idx, value in enumerate(values):
-                if _is_missing(value):
+        seq_tokens = np.zeros((size, self.config.seq_token_count, self.seq_len), dtype=np.int64)
+        seq_mask = np.zeros((size, self.config.seq_token_count, self.seq_len), dtype=np.bool_)
+        for domain_idx, (_domain_name, columns) in enumerate(self.config.seq_groups.items()):
+            for row_idx in range(size):
+                domain_values = []
+                for col in columns:
+                    values = rows.get(col)
+                    if values is None:
+                        continue
+                    for value in _as_list(values[row_idx]):
+                        token = stable_hash(f"{col}={value}", self.hash_size)
+                        if token:
+                            domain_values.append(token)
+                if not domain_values:
                     continue
-                dense[row_idx, col_idx] = _numeric_value(value)
-                dense_mask[row_idx, col_idx] = True
+                clipped = domain_values[-self.seq_len :]
+                start = self.seq_len - len(clipped)
+                seq_tokens[row_idx, domain_idx, start:] = np.asarray(clipped, dtype=np.int64)
+                seq_mask[row_idx, domain_idx, start:] = True
 
         batch: dict[str, torch.Tensor | list] = {
-            "cat_tokens": torch.from_numpy(cat),
-            "dense_values": torch.from_numpy(dense),
-            "dense_mask": torch.from_numpy(dense_mask),
-            "time_features": torch.from_numpy(build_time_features(rows, size)),
+            "ns_tokens": torch.from_numpy(ns_tokens),
+            "ns_dense": torch.from_numpy(ns_dense),
+            "seq_tokens": torch.from_numpy(seq_tokens),
+            "seq_mask": torch.from_numpy(seq_mask),
+            "time_features": torch.from_numpy(time_features),
         }
 
         if self.include_label and self.config.label_column:
@@ -157,12 +184,10 @@ class TAAC2026Batcher:
                 labels = (labels > 0).astype(np.float32)
             batch["labels"] = torch.from_numpy(labels)
 
-        user_ids = rows.get("user_id")
-        item_ids = rows.get("item_id")
-        if user_ids is not None:
-            batch["user_id"] = [str(x) for x in user_ids]
-        if item_ids is not None:
-            batch["item_id"] = [str(x) for x in item_ids]
+        if "user_id" in rows:
+            batch["user_id"] = [str(x) for x in rows["user_id"]]
+        if "item_id" in rows:
+            batch["item_id"] = [str(x) for x in rows["item_id"]]
         return batch
 
 
