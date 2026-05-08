@@ -15,18 +15,33 @@ import torch
 from torch.utils.data import DataLoader
 
 _THIS_DIR = Path(__file__).resolve().parent
-_TRAINING_DIR = _THIS_DIR.parent / "training"
-if str(_TRAINING_DIR) not in sys.path:
-    sys.path.append(str(_TRAINING_DIR))
+if str(_THIS_DIR) not in sys.path:
+    sys.path.append(str(_THIS_DIR))
 
 try:
     from .dataset import FeatureSchema, NUM_TIME_BUCKETS, PCVRParquetDataset
     from .model import ModelInput, PCVRHyFormer
-    from .utils import create_logger
 except ImportError:
     from dataset import FeatureSchema, NUM_TIME_BUCKETS, PCVRParquetDataset
     from model import ModelInput, PCVRHyFormer
-    from utils import create_logger
+
+
+def create_logger(log_file: str) -> logging.Logger:
+    """Small self-contained logger for evaluation-only submissions."""
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    for handler in list(logger.handlers):
+        logger.removeHandler(handler)
+
+    Path(log_file).parent.mkdir(parents=True, exist_ok=True)
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler = logging.FileHandler(log_file, mode="w", encoding="utf-8")
+    file_handler.setFormatter(formatter)
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.addHandler(stream_handler)
+    return logger
 
 
 def build_feature_specs(
@@ -432,5 +447,9 @@ def infer() -> Dict[str, Any]:
     return summary
 
 
+def main() -> Dict[str, Any]:
+    return infer()
+
+
 if __name__ == "__main__":
-    infer()
+    main()
