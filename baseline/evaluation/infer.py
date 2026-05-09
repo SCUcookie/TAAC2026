@@ -65,16 +65,21 @@ def parse_args() -> argparse.Namespace:
                         help="Checkpoint root directory (env: MODEL_OUTPUT_PATH or TRAIN_CKPT_PATH)")
     parser.add_argument("--result_dir", type=str, default=None,
                         help="Output directory (env: EVAL_RESULT_PATH)")
-    parser.add_argument("--batch_size", type=int, default=4096)
+    parser.add_argument("--batch_size", type=int, default=2048)
     parser.add_argument("--num_workers", type=int, default=0)
     parser.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--output_name", type=str, default="predictions.json")
+    parser.add_argument("--progress_every", type=int, default=50)
+    parser.add_argument("--use_amp", action="store_true", default=False)
     args, unknown = parser.parse_known_args()
     if unknown:
         print(f"Ignoring unsupported inference args: {unknown}")
     args.eval_data_dir = os.environ.get("EVAL_DATA_PATH", args.eval_data_dir)
     args.model_dir = os.environ.get("MODEL_OUTPUT_PATH", os.environ.get("TRAIN_CKPT_PATH", args.model_dir))
     args.result_dir = os.environ.get("EVAL_RESULT_PATH", args.result_dir)
+    args.batch_size = int(os.environ.get("EVAL_BATCH_SIZE", args.batch_size))
+    args.num_workers = int(os.environ.get("EVAL_NUM_WORKERS", args.num_workers))
+    args.use_amp = os.environ.get("EVAL_USE_AMP", "0").lower() in {"1", "true", "yes"}
     return args
 
 
@@ -124,6 +129,17 @@ def parse_seq_max_lens(raw: Any) -> Dict[str, int]:
             continue
         key, value = pair.split(":")
         seq_max_lens[key.strip()] = int(value.strip())
+    return seq_max_lens
+
+
+def apply_eval_seq_max_lens_override(seq_max_lens: Dict[str, int]) -> Dict[str, int]:
+    override = os.environ.get("EVAL_SEQ_MAX_LENS")
+    if override:
+        return parse_seq_max_lens(override)
+    cap = os.environ.get("EVAL_SEQ_LEN_CAP")
+    if cap:
+        cap_value = int(cap)
+        return {domain: min(length, cap_value) for domain, length in seq_max_lens.items()}
     return seq_max_lens
 
 
@@ -181,6 +197,33 @@ def move_batch_to_device(batch: Dict[str, Any], device: torch.device) -> Dict[st
     return moved
 
 
+def batch_row_count(batch: Dict[str, Any]) -> int:
+    for value in batch.values():
+        if isinstance(value, torch.Tensor):
+            return int(value.shape[0])
+    return len(batch.get("user_id", []))
+
+
+def merge_cpu_batches(batches: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if len(batches) == 1:
+        return batches[0]
+
+    merged: Dict[str, Any] = {}
+    keys = batches[0].keys()
+    for key in keys:
+        first = batches[0][key]
+        if isinstance(first, torch.Tensor):
+            merged[key] = torch.cat([batch[key] for batch in batches], dim=0)
+        elif key in {"user_id", "item_id"}:
+            values: List[Any] = []
+            for batch in batches:
+                values.extend(batch.get(key, []))
+            merged[key] = values
+        else:
+            merged[key] = first
+    return merged
+
+
 def write_outputs(
     result_dir: Path,
     user_ids: List[str],
@@ -206,6 +249,19 @@ def write_outputs(
             f.write(f"{user_id},{float(score):.8f}\n")
 
     np.save(result_dir / "scores.npy", np.asarray(scores, dtype=np.float32))
+
+
+def sanitize_scores(scores: np.ndarray) -> Tuple[np.ndarray, Dict[str, int]]:
+    nan_count = int(np.isnan(scores).sum())
+    posinf_count = int(np.isposinf(scores).sum())
+    neginf_count = int(np.isneginf(scores).sum())
+    scores = np.nan_to_num(scores, nan=0.0, posinf=1.0, neginf=0.0)
+    scores = np.clip(scores, 0.0, 1.0)
+    return scores, {
+        "nan_replaced": nan_count,
+        "posinf_replaced": posinf_count,
+        "neginf_replaced": neginf_count,
+    }
 
 
 def score_stats(scores: List[float]) -> Dict[str, Any]:
@@ -295,8 +351,9 @@ def infer() -> Dict[str, Any]:
     logging.info("Using checkpoint directory: %s", ckpt_dir)
     logging.info("Using schema path: %s", schema_path)
 
-    seq_max_lens = parse_seq_max_lens(train_cfg.get("seq_max_lens"))
-    batch_size = int(train_cfg.get("batch_size", args.batch_size) or args.batch_size)
+    train_seq_max_lens = parse_seq_max_lens(train_cfg.get("seq_max_lens"))
+    seq_max_lens = apply_eval_seq_max_lens_override(train_seq_max_lens)
+    batch_size = int(args.batch_size)
     train_cfg_summary = {
         "seq_max_lens": train_cfg.get("seq_max_lens"),
         "d_model": train_cfg.get("d_model"),
@@ -305,7 +362,8 @@ def infer() -> Dict[str, Any]:
         "num_queries": train_cfg.get("num_queries"),
         "seq_encoder_type": train_cfg.get("seq_encoder_type"),
         "loss_type": train_cfg.get("loss_type"),
-        "batch_size": batch_size,
+        "train_batch_size": train_cfg.get("batch_size"),
+        "eval_batch_size": batch_size,
         "emb_skip_threshold": train_cfg.get("emb_skip_threshold"),
     }
     print_platform_event("INFER_CONFIG", {
@@ -316,6 +374,7 @@ def infer() -> Dict[str, Any]:
         "result_dir": str(result_dir),
         "device": str(device),
         "num_workers": args.num_workers,
+        "use_amp": args.use_amp,
         "train_config": train_cfg_summary,
     })
 
@@ -393,11 +452,26 @@ def infer() -> Dict[str, Any]:
     start = time.time()
     first_batch_event = False
     with torch.no_grad():
-        for batch in loader:
+        amp_enabled = bool(args.use_amp and device.type == "cuda")
+        pending_batches: List[Dict[str, Any]] = []
+        pending_rows = 0
+        forward_batches = 0
+
+        def run_pending() -> None:
+            nonlocal pending_batches, pending_rows, forward_batches, first_batch_event
+            if not pending_batches:
+                return
+            forward_batches += 1
+            batch = merge_cpu_batches(pending_batches)
+            pending_batches = []
+            pending_rows = 0
             batch = move_batch_to_device(batch, device)
             model_input = make_model_input(batch, device)
-            logits, _ = model.predict(model_input)
-            batch_scores = torch.sigmoid(logits.squeeze(-1)).detach().cpu().numpy().astype(float).tolist()
+            with torch.amp.autocast(device_type=device.type, enabled=amp_enabled):
+                logits, _ = model.predict(model_input)
+            batch_scores_np = torch.sigmoid(logits.squeeze(-1)).detach().float().cpu().numpy()
+            batch_scores_np, sanitize_counts = sanitize_scores(batch_scores_np.astype(np.float64))
+            batch_scores = batch_scores_np.astype(float).tolist()
             user_ids = batch.get("user_id", [""] * len(batch_scores))
             scores.extend(batch_scores)
             all_user_ids.extend(str(user_id) for user_id in user_ids)
@@ -406,8 +480,30 @@ def infer() -> Dict[str, Any]:
                     "batch_predictions": len(batch_scores),
                     "sample_user_ids": [str(x) for x in user_ids[:5]],
                     "sample_scores": [round(float(x), 8) for x in batch_scores[:5]],
+                    "sanitize_counts": sanitize_counts,
                 })
                 first_batch_event = True
+            elif any(sanitize_counts.values()):
+                print_platform_event("SCORE_SANITIZE", {
+                    "forward_batch": forward_batches,
+                    "predictions": len(scores),
+                    **sanitize_counts,
+                })
+            if args.progress_every > 0 and forward_batches % args.progress_every == 0:
+                elapsed = max(time.time() - start, 1e-6)
+                print_platform_event("INFER_PROGRESS", {
+                    "batches": forward_batches,
+                    "predictions": len(scores),
+                    "elapsed_sec": round(elapsed, 3),
+                    "rows_per_sec": round(len(scores) / elapsed, 2),
+                })
+
+        for row_group_batch in loader:
+            pending_batches.append(row_group_batch)
+            pending_rows += batch_row_count(row_group_batch)
+            if pending_rows >= batch_size:
+                run_pending()
+        run_pending()
 
     if len(all_user_ids) != len(scores):
         raise RuntimeError(

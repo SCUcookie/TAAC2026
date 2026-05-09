@@ -118,6 +118,22 @@ Each record should include:
 
 Use the filename pattern `YYYY-MM-DD_HHMM_short-title.md`.
 
+## 8.1 Current Day Handoff
+
+Completed on 2026-05-08:
+
+- Baseline submission path was exercised.
+- Evaluation submission code was made self-contained and instrumented with `print` feedback logs.
+- Timeout and NaN failures were diagnosed from platform logs and patched in `baseline/evaluation/infer.py`.
+- A separate `LOSS_TYPE=bce_pairwise` training path was added for tomorrow's improvement experiment.
+
+Tomorrow's first actions:
+
+1. Resubmit the patched baseline evaluation path if the latest platform run has not yet produced a clean score.
+2. Inspect the platform logs for `PLATFORM_INFER_SUMMARY` and any `PLATFORM_SCORE_SANITIZE` entries.
+3. Compare the returned score with `0.8133`.
+4. Move to the `bce_pairwise` experiment only after the baseline path is stable.
+
 ## 9. Current Experiment Discipline
 
 - Do not spend time re-proving that the baseline runs; it already has a successful model and evaluation.
