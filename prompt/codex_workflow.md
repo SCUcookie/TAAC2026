@@ -50,7 +50,9 @@ The workflow is:
 ### Planning and process
 
 - `prompt/`: the working process hub.
-- `feedbacks/records/`: chronological run history with metrics and logs.
+- `submission/runs/`: immutable code snapshots for each run id.
+- `feedbacks/runs/`: run-linked feedback, logs, and error notes.
+- `feedbacks/records/`: chronological run history with metrics and links.
 - `docs/planning/`: longer planning notes and archival prompts.
 
 ### References
@@ -104,9 +106,16 @@ A checkpoint may be promoted only if:
 
 ## 8. Feedback Logging
 
-Write one record per meaningful run into `feedbacks/records/`.
+Use one shared run id for code, logs, and feedback, with the filename pattern `YYYY-MM-DD_HHMM_short-title`.
 
-Each record should include:
+For each meaningful run:
+
+- copy the submitted training code snapshot into `submission/runs/<run_id>/train/`,
+- copy the submitted evaluation code snapshot into `submission/runs/<run_id>/eval/`,
+- write the detailed train/eval/error notes under `feedbacks/runs/<run_id>/`,
+- write the short chronological summary into `feedbacks/records/<run_id>.md`.
+
+Each summary record should include:
 
 - date and time,
 - experiment name,
@@ -114,9 +123,8 @@ Each record should include:
 - accuracy or score,
 - key log notes,
 - decision,
-- next action.
-
-Use the filename pattern `YYYY-MM-DD_HHMM_short-title.md`.
+- next action,
+- links to the matching code and feedback folders.
 
 ## 8.1 Current Day Handoff
 

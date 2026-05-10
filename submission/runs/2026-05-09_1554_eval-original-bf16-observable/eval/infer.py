@@ -74,16 +74,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--amp_dtype", type=str, default="bf16",
                         choices=["bf16", "fp16"],
                         help="CUDA autocast dtype when AMP is enabled")
-    parser.add_argument("--merge_batches", action="store_true", default=False,
-                        help="Merge small parquet row-group batches up to --batch_size before forward")
-    parser.add_argument("--tta_mode", type=str, default="none",
-                        choices=["none", "recent_blend"],
-                        help="Optional test-time augmentation mode for ranking improvement")
-    parser.add_argument("--tta_weight", type=float, default=0.12,
-                        help="Blend weight for the TTA logit when --tta_mode=recent_blend")
-    parser.add_argument("--tta_crop_lens", type=str,
-                        default="seq_a:128,seq_b:128,seq_c:256,seq_d:256",
-                        help="Per-domain recent-history crop lengths for TTA")
     args, unknown = parser.parse_known_args()
     if unknown:
         print(f"Ignoring unsupported inference args: {unknown}")
@@ -95,10 +85,6 @@ def parse_args() -> argparse.Namespace:
     args.use_amp = os.environ.get("EVAL_USE_AMP", "1").lower() in {"1", "true", "yes"}
     args.amp_dtype = os.environ.get("EVAL_AMP_DTYPE", args.amp_dtype).lower()
     args.progress_every = int(os.environ.get("EVAL_PROGRESS_EVERY", args.progress_every))
-    args.merge_batches = os.environ.get("EVAL_MERGE_BATCHES", "0").lower() in {"1", "true", "yes"}
-    args.tta_mode = os.environ.get("EVAL_TTA_MODE", args.tta_mode).lower()
-    args.tta_weight = float(os.environ.get("EVAL_TTA_WEIGHT", args.tta_weight))
-    args.tta_crop_lens = os.environ.get("EVAL_TTA_CROP_LENS", args.tta_crop_lens)
     return args
 
 
@@ -357,58 +343,6 @@ def resolve_amp_dtype(device: torch.device, use_amp: bool, requested_dtype: str)
     return True, torch.float16, "fp16"
 
 
-def crop_model_input_recent(
-    model_input: ModelInput,
-    crop_lens: Dict[str, int],
-) -> ModelInput:
-    """Build a recency-focused view using the smallest nonzero time buckets."""
-    cropped_seq_data: Dict[str, torch.Tensor] = {}
-    cropped_seq_lens: Dict[str, torch.Tensor] = {}
-    cropped_time_buckets: Dict[str, torch.Tensor] = {}
-
-    for domain, seq in model_input.seq_data.items():
-        B, S, L = seq.shape
-        k = int(crop_lens.get(domain, L))
-        k = max(1, min(k, L))
-        lens = model_input.seq_lens[domain]
-        time_buckets = model_input.seq_time_buckets[domain]
-        device = seq.device
-
-        pos = torch.arange(L, device=device).unsqueeze(0).expand(B, L)
-        valid = pos < lens.unsqueeze(1)
-        large = torch.full_like(time_buckets, fill_value=1_000_000)
-        # Lower positive time buckets are more recent. Missing timestamp
-        # buckets fall back to original position ordering.
-        has_time = time_buckets > 0
-        sort_key = torch.where(valid & has_time, time_buckets, large)
-        fallback_key = torch.where(valid, pos + 100_000, large)
-        sort_key = torch.where(has_time.any(dim=1, keepdim=True), sort_key, fallback_key)
-        recent_idx = torch.argsort(sort_key, dim=1)[:, :k]
-        recent_idx = torch.sort(recent_idx, dim=1).values
-
-        gather_idx = recent_idx.unsqueeze(1).expand(B, S, k)
-        cropped_seq = torch.gather(seq, dim=2, index=gather_idx)
-        cropped_tb = torch.gather(time_buckets, dim=1, index=recent_idx)
-        cropped_len = torch.clamp(lens, max=k)
-        valid_new = torch.arange(k, device=device).unsqueeze(0) < cropped_len.unsqueeze(1)
-        cropped_seq = cropped_seq * valid_new.unsqueeze(1).to(cropped_seq.dtype)
-        cropped_tb = cropped_tb * valid_new.to(cropped_tb.dtype)
-
-        cropped_seq_data[domain] = cropped_seq
-        cropped_seq_lens[domain] = cropped_len
-        cropped_time_buckets[domain] = cropped_tb
-
-    return ModelInput(
-        user_int_feats=model_input.user_int_feats,
-        item_int_feats=model_input.item_int_feats,
-        user_dense_feats=model_input.user_dense_feats,
-        item_dense_feats=model_input.item_dense_feats,
-        seq_data=cropped_seq_data,
-        seq_lens=cropped_seq_lens,
-        seq_time_buckets=cropped_time_buckets,
-    )
-
-
 def infer() -> Dict[str, Any]:
     args = parse_args()
     print_platform_event("INFER_START", {
@@ -462,11 +396,7 @@ def infer() -> Dict[str, Any]:
         "num_workers": args.num_workers,
         "use_amp": args.use_amp,
         "amp_dtype": args.amp_dtype,
-        "merge_batches": args.merge_batches,
         "progress_every": args.progress_every,
-        "tta_mode": args.tta_mode,
-        "tta_weight": args.tta_weight,
-        "tta_crop_lens": args.tta_crop_lens,
         "train_config": train_cfg_summary,
     })
 
@@ -543,14 +473,6 @@ def infer() -> Dict[str, Any]:
     scores: List[float] = []
     start = time.time()
     first_batch_event = False
-    tta_crop_lens = parse_seq_max_lens(args.tta_crop_lens)
-    tta_enabled = args.tta_mode == "recent_blend" and args.tta_weight > 0.0
-    if tta_enabled:
-        print_platform_event("TTA_CONFIG", {
-            "mode": args.tta_mode,
-            "weight": args.tta_weight,
-            "crop_lens": tta_crop_lens,
-        })
     with torch.no_grad():
         amp_enabled, amp_dtype, amp_mode = resolve_amp_dtype(device, args.use_amp, args.amp_dtype)
         print_platform_event("AMP_CONFIG", {
@@ -564,7 +486,6 @@ def infer() -> Dict[str, Any]:
         forward_batches = 0
         row_group_batches = 0
         last_progress_time = start
-        last_progress_predictions = 0
         timing_sums = {
             "merge_sec": 0.0,
             "move_sec": 0.0,
@@ -575,13 +496,12 @@ def infer() -> Dict[str, Any]:
         def run_pending() -> None:
             nonlocal pending_batches, pending_rows, forward_batches, first_batch_event, last_progress_time
             nonlocal amp_enabled, amp_dtype, amp_mode
-            nonlocal last_progress_predictions
             if not pending_batches:
                 return
             forward_batches += 1
             rows_in_forward = pending_rows
             t0 = time.time()
-            batch = merge_cpu_batches(pending_batches) if len(pending_batches) > 1 else pending_batches[0]
+            batch = merge_cpu_batches(pending_batches)
             pending_batches = []
             pending_rows = 0
             t1 = time.time()
@@ -603,12 +523,6 @@ def infer() -> Dict[str, Any]:
                 return logits_now
 
             logits = forward_once(amp_enabled, amp_dtype)
-            if tta_enabled:
-                full_model_input = model_input
-                model_input = crop_model_input_recent(full_model_input, tta_crop_lens)
-                tta_logits = forward_once(amp_enabled, amp_dtype)
-                model_input = full_model_input
-                logits = (1.0 - args.tta_weight) * logits + args.tta_weight * tta_logits
             raw_scores = torch.sigmoid(logits.squeeze(-1)).detach().float().cpu().numpy()
             if amp_enabled and not np.isfinite(raw_scores).all():
                 nonfinite_count = int((~np.isfinite(raw_scores)).sum())
@@ -623,12 +537,6 @@ def infer() -> Dict[str, Any]:
                 amp_dtype = None
                 amp_mode = "fp32_after_nonfinite"
                 logits = forward_once(False, None)
-                if tta_enabled:
-                    full_model_input = model_input
-                    model_input = crop_model_input_recent(full_model_input, tta_crop_lens)
-                    tta_logits = forward_once(False, None)
-                    model_input = full_model_input
-                    logits = (1.0 - args.tta_weight) * logits + args.tta_weight * tta_logits
                 raw_scores = torch.sigmoid(logits.squeeze(-1)).detach().float().cpu().numpy()
             t3 = time.time()
             batch_scores_np, sanitize_counts = sanitize_scores(raw_scores.astype(np.float64))
@@ -648,7 +556,6 @@ def infer() -> Dict[str, Any]:
                     "sample_user_ids": [str(x) for x in user_ids[:5]],
                     "sample_scores": [round(float(x), 8) for x in batch_scores[:5]],
                     "sanitize_counts": sanitize_counts,
-                    "tta_mode": args.tta_mode if tta_enabled else "none",
                     "timing_sec": {
                         "merge": round(t1 - t0, 4),
                         "move": round(t2 - t1, 4),
@@ -666,16 +573,14 @@ def infer() -> Dict[str, Any]:
             if args.progress_every > 0 and forward_batches % args.progress_every == 0:
                 elapsed = max(time.time() - start, 1e-6)
                 since_last = max(time.time() - last_progress_time, 1e-6)
-                new_predictions = len(scores) - last_progress_predictions
                 last_progress_time = time.time()
-                last_progress_predictions = len(scores)
                 print_platform_event("INFER_PROGRESS", {
                     "batches": forward_batches,
                     "row_group_batches": row_group_batches,
                     "predictions": len(scores),
                     "elapsed_sec": round(elapsed, 3),
                     "rows_per_sec": round(len(scores) / elapsed, 2),
-                    "recent_rows_per_sec": round(new_predictions / since_last, 2),
+                    "recent_rows_per_sec": round((args.progress_every * batch_size) / since_last, 2),
                     "amp_mode": amp_mode,
                     "timing_avg_sec": {
                         "merge": round(timing_sums["merge_sec"] / forward_batches, 4),
@@ -689,7 +594,7 @@ def infer() -> Dict[str, Any]:
             row_group_batches += 1
             pending_batches.append(row_group_batch)
             pending_rows += batch_row_count(row_group_batch)
-            if not args.merge_batches or pending_rows >= batch_size:
+            if pending_rows >= batch_size:
                 run_pending()
         run_pending()
 

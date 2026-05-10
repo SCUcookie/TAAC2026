@@ -23,7 +23,7 @@ Start today's new training run and first platform evaluation submission concurre
 
 ## Result
 
-Upload artifacts prepared locally. Platform job creation still needs to be started in the competition platform, because no local submission CLI is present in this workspace.
+Training submission failed quickly, and Eval1 also timed out on the original baseline checkpoint.
 
 ## Log Notes
 
@@ -31,12 +31,17 @@ Upload artifacts prepared locally. Platform job creation still needs to be start
 - `baseline/training/run.sh` was added so the training lane can be uploaded independently and starts the `bce_pairwise` candidate by default.
 - Python parse check passed for the changed entry points with `python -B` and `ast.parse`.
 - Standard `py_compile` was not usable locally because Windows denied writing a `__pycache__` replacement file.
+- Training failure log copied to `feedbacks/logs_output/error4.md`.
+- Failure cause: runtime `train.py` rejected `--loss_type=bce_pairwise`, reporting choices `bce` and `focal`.
+- A retry archive was prepared with a robust launcher that falls back to `focal` if the runtime parser lacks `bce_pairwise` support: `submission/platform_uploads/2026-05-09_training_pairwise-or-focal-retry.zip`.
+- Eval1 used the original baseline checkpoint and hit the platform timeout before `PLATFORM_INFER_SUMMARY` was emitted.
+- Structured eval logs were written to `feedbacks/logs_output/eval/2026-05-09_1048_eval1-original-baseline-timeout.md` and `feedbacks/logs_output/error/2026-05-09_1048_eval1-original-baseline-timeout.md`.
 
 ## Decision
 
 Submit the two prepared archives concurrently through the platform:
 
-1. Start the training job from `2026-05-09_training_bce_pairwise.zip`.
+1. Retry the training job from `2026-05-09_training_pairwise-or-focal-retry.zip`.
 2. Start Eval1 from `2026-05-09_eval1_original-baseline_bs2048_fp32.zip`, selecting the original baseline checkpoint.
 
 ## Next Action

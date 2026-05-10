@@ -76,7 +76,7 @@ def parse_args() -> argparse.Namespace:
                         help="CUDA autocast dtype when AMP is enabled")
     parser.add_argument("--merge_batches", action="store_true", default=False,
                         help="Merge small parquet row-group batches up to --batch_size before forward")
-    parser.add_argument("--tta_mode", type=str, default="none",
+    parser.add_argument("--tta_mode", type=str, default="recent_blend",
                         choices=["none", "recent_blend"],
                         help="Optional test-time augmentation mode for ranking improvement")
     parser.add_argument("--tta_weight", type=float, default=0.12,
