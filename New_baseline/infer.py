@@ -94,7 +94,11 @@ _FALLBACK_MODEL_CFG = {
 _FALLBACK_SEQ_MAX_LENS = 'seq_a:256,seq_b:256,seq_c:512,seq_d:512'
 _FALLBACK_BATCH_SIZE = 2048
 _FALLBACK_NUM_WORKERS = 4
-_FALLBACK_EVAL_SEQ_LEN_CAP = 256
+# Default evaluation window. The 256/256/256/256 run was very fast but lost
+# AUC, while the full 512/512 long-domain window was too slow. Spend most of
+# the available budget on the long domains and leave EVAL_SEQ_MAX_LENS as the
+# explicit override for further sweeps.
+_FALLBACK_EVAL_SEQ_MAX_LENS = 'seq_a:256,seq_b:256,seq_c:512,seq_d:448'
 
 
 # Hyperparameter keys used to build the model. Everything else in
@@ -136,10 +140,15 @@ def _apply_eval_seq_max_lens_override(seq_max_lens: Dict[str, int]) -> Dict[str,
     override = os.environ.get('EVAL_SEQ_MAX_LENS')
     if override:
         return _parse_seq_max_lens(override)
-    cap_value = int(os.environ.get('EVAL_SEQ_LEN_CAP', str(_FALLBACK_EVAL_SEQ_LEN_CAP)))
-    if cap_value > 0:
+    cap = os.environ.get('EVAL_SEQ_LEN_CAP')
+    if cap:
+        cap_value = int(cap)
         return {domain: min(length, cap_value) for domain, length in seq_max_lens.items()}
-    return seq_max_lens
+    default_lens = _parse_seq_max_lens(_FALLBACK_EVAL_SEQ_MAX_LENS)
+    return {
+        domain: min(length, default_lens.get(domain, length))
+        for domain, length in seq_max_lens.items()
+    }
 
 
 def _platform_event(name: str, payload: Dict[str, Any]) -> None:
