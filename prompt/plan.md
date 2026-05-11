@@ -1,71 +1,64 @@
-# Plan
+# Evaluation-Only AUC Plan
 
-## Immediate Tasks
+## Current Best
 
-1. Use the existing successful `baseline/` run as the benchmark.
-2. Improve model training code and evaluation strategy to beat score `0.8133`.
-3. Make all active code changes under `baseline/training/` and `baseline/evaluation/`.
-4. Store experiment notes in `feedbacks/records/` in chronological order.
-5. Add each new idea or parameter change to this plan before the next run.
-6. Verify the local inference output before any platform submission.
+- Current best evaluation result: AUC `0.813094`, inference time `1480.38s`.
+- Best checkpoint remains the original baseline checkpoint under the best known evaluator.
+- AUC is the priority; high latency close to the platform limit is acceptable if it improves AUC.
+- Preserve the original baseline checkpoint and model weights.
+- For evaluation improvement work, stop changing training code. Only evaluation-side code should change unless the user explicitly redirects to a new training run.
 
-## Current Benchmark
+## Latest New-Model Result
 
-- Source: already-running `baseline/` split.
-- Status: one trained model and one successful evaluation result.
-- Score to beat: `0.8133`.
-- Do not repeat baseline setup unless needed for a controlled comparison.
+- The newly trained model was evaluated with the best known evaluation method that produced AUC `0.813094` on the original baseline checkpoint.
+- Result: AUC `0.80424`, inference time `907.78s`.
+- Interpretation: this checkpoint is not competitive with the original baseline checkpoint and should not replace it for evaluation-only tuning.
+- User plans to retrain this model with 2 GPUs because the one-GPU attempt hit OOM.
+- Keep the original baseline checkpoint as the score target and fallback while any 2-GPU retraining experiment runs.
 
-## 2026-05-08 Completed Work
+## Best Known Config
 
-- Submitted the very original baseline model for today's evaluation attempts.
-- Added `print` feedback logs to `baseline/evaluation/infer.py` so platform output captures start, checkpoint status, dataset shape, model readiness, first batch samples, progress, score sanitization, and output-file status.
-- Fixed the evaluation package import failure by making `baseline/evaluation/infer.py` self-contained and exposing `main()`.
-- Diagnosed the timeout: evaluation inherited training batch size `256`, requiring about 1211 small forwards on 310000 rows.
-- Patched evaluation to use an explicit eval batch size and progress logs.
-- Diagnosed the NaN failure: AMP/mixed precision caused non-finite scores.
-- Patched evaluation to disable AMP by default, sanitize non-finite scores defensively, and merge small row-group batches before each model forward.
-- Added the opt-in `LOSS_TYPE=bce_pairwise` training path for tomorrow's improvement experiment; baseline default remains `LOSS_TYPE=bce`.
+- `seq_max_lens=seq_a:256,seq_b:256,seq_c:512,seq_d:448`
+- `EVAL_TTA_MODE=recent_blend`
+- `EVAL_TTA_WEIGHT=0.12`
+- `EVAL_TTA_REPEAT=14`
+- `EVAL_TTA_CROP_LENS=seq_a:128,seq_b:128,seq_c:256,seq_d:256`
 
-## 2026-05-09 Current Status
+## Active Direction
 
-- Yesterday's last platform evaluation stopped due to inference timeout; see `feedbacks/logs_output/log4.md`.
-- That run used full precision with `EVAL_BATCH_SIZE=1024`, original long sequence lengths, and reached only `181192 / 310000` predictions after about `1738` seconds.
-- The newly trained model from `baseline/training/` scored `0.812668` when evaluated with the original evaluation code.
-- The original baseline model scored `0.813033` with the same original evaluation code, so it remains the stronger of the two already trained models.
-- Today's plan is to launch one new multi-hour training run and the two evaluation submissions concurrently. The evaluation submissions should finish before the new training run completes.
+The next evaluation-only AUC direction is to implement true raw-sequence tail-window scoring and blend it with the existing full-window score.
 
-## 2026-05-09 Next Actions
+Do not spend more effort tuning `EVAL_TTA_REPEAT`; it mainly changes latency, not ranking. Repeating deterministic logits does not meaningfully change rank order.
 
-1. Start a new training run from `baseline/training/`; use only one meaningful change from the previous training run so the result is interpretable.
-2. In parallel with that training run, submit evaluation for the original baseline model first, because it is the stronger known checkpoint under the original evaluator.
-3. Submit evaluation for the newly trained model as the second evaluation process, mainly to compare whether the platform score agrees with the local/original-evaluator result.
-4. Use the patched evaluator only with a speed setting that can finish inside the platform timeout. Candidate options:
-   - prefer `EVAL_BATCH_SIZE=2048` with full precision if memory permits;
-   - if still too slow, set `EVAL_SEQ_LEN_CAP` and record the exact cap;
-   - do not enable `EVAL_USE_AMP=1` unless a smoke test confirms finite scores.
-5. Confirm each platform log includes `PLATFORM_INFER_SUMMARY` and no meaningful `PLATFORM_SCORE_SANITIZE` counts.
-6. Record both returned scores and logs while the new training run continues, then use those results to guide the next training/evaluation decision.
+## Next Implementation
 
-## Experiment Order
+Work in `New_baseline/` unless the user redirects.
 
-1. Start from the working baseline code path.
-2. Apply one model or evaluation-method change intended to improve beyond `0.8133`.
-3. Run a short validation/smoke pass before any long training.
-4. Evaluate with the updated evaluation method and record accuracy/score plus logs.
-5. Promote only checkpoints that clearly improve against the `0.8133` benchmark.
+1. Inspect current `New_baseline/infer.py` and `New_baseline/dataset.py`.
+2. Add an eval-only way to read suffix/tail windows from raw sequences using `values[end - use_len:end]`.
+3. Keep the existing prefix/full-window behavior available. The current dataset prefix truncation uses `values[start:start + use_len]`.
+4. Blend logits from the full/prefix view and the true-tail view.
+5. Log the active window mode and blend weights in inference output.
+6. Record every submitted result in `feedbacks/records/`.
 
-## Active Candidate
+## Initial Candidate
 
-- Training code directory: `baseline/training/`
-- Evaluation code directory: `baseline/evaluation/`
-- Local labeled evaluation: `python baseline/evaluation/local_eval.py --experiment_name baseline-local-eval`
-- Improvement method to explore after first submission: `LOSS_TYPE=bce_pairwise` with sampled pairwise AUC loss.
-- Baseline default remains `LOSS_TYPE=bce`; set `LOSS_TYPE=bce_pairwise` only for the new experiment.
-- Evaluation safety defaults: full precision, `EVAL_BATCH_SIZE` controls merged inference batch size, `EVAL_USE_AMP=1` should not be used unless a smoke test confirms finite scores.
-- Timeout risk: `EVAL_BATCH_SIZE=1024` plus original sequence lengths was too slow on 2026-05-08; use `2048` or a recorded `EVAL_SEQ_LEN_CAP` for platform attempts.
+- Full-window logit weight: `0.85`
+- Tail-window logit weight: `0.15`
+- Keep BF16 AMP unless logs show non-finite scores.
+- Target runtime can approach the limit if AUC improves.
 
-## Update Rule
+## Useful Variants To Test
 
-- If feedback changes the next action, update this file immediately.
-- Keep the next step small and explicit.
+1. Full-window + true-tail blend, tail weight `0.15`.
+2. Weight sweep: `0.08`, `0.12`, `0.20`.
+3. Multi-window blend: prefix + middle + tail, only if tail blend helps.
+4. FP32/no-AMP comparison only if there is enough evaluation budget.
+
+## Pre-Submission Test Plan
+
+1. Run syntax check on changed Python files.
+2. Confirm inference config logs include the active window mode and blend weights.
+3. Confirm output has exactly `310000` predictions and `310000` unique user IDs.
+4. Confirm scores are finite and non-negative.
+5. Confirm platform log reaches `PLATFORM_INFER_SUMMARY`.
