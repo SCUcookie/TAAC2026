@@ -159,7 +159,6 @@ class PCVRParquetDataset(IterableDataset):
         use_continuous_time: bool = False,
         seq_window_mode: str = 'prefix',
         include_tail_view: bool = False,
-        include_target_view: bool = False,
     ) -> None:
         """
         Args:
@@ -204,7 +203,6 @@ class PCVRParquetDataset(IterableDataset):
                 f"seq_window_mode must be 'prefix' or 'tail', got {seq_window_mode!r}")
         self.seq_window_mode = seq_window_mode
         self.include_tail_view = include_tail_view
-        self.include_target_view = include_target_view
         self.xdomain_dense_dim = 18 if use_xdomain_features else 0
         # Out-of-bound statistics:
         #   {(group, col_idx): {'count': N, 'max': M, 'min_oob': M, 'vocab': V}}
@@ -299,8 +297,7 @@ class PCVRParquetDataset(IterableDataset):
             f"PCVRParquetDataset: {self.num_rows} rows from "
             f"{len(self._parquet_files)} file(s), batch_size={batch_size}, "
             f"buffer_batches={buffer_batches}, shuffle={shuffle}, "
-            f"seq_window_mode={seq_window_mode}, include_tail_view={include_tail_view}, "
-            f"include_target_view={include_target_view}")
+            f"seq_window_mode={seq_window_mode}, include_tail_view={include_tail_view}")
 
     def _load_schema(self, schema_path: str, seq_max_lens: Dict[str, int]) -> None:
         """Populate per-group schema information from ``schema_path``."""
@@ -685,8 +682,6 @@ class PCVRParquetDataset(IterableDataset):
         seq_all_values: Dict[str, "npt.NDArray[np.int64]"] = {}
         seq_tail_primary_values: Dict[str, "npt.NDArray[np.int64]"] = {}
         seq_tail_all_values: Dict[str, "npt.NDArray[np.int64]"] = {}
-        seq_target_primary_values: Dict[str, "npt.NDArray[np.int64]"] = {}
-        seq_target_all_values: Dict[str, "npt.NDArray[np.int64]"] = {}
 
         # ---- Sequence features: fused padding directly into the 3D buffer ----
         for domain in self.seq_domains:
@@ -761,57 +756,6 @@ class PCVRParquetDataset(IterableDataset):
                 seq_tail_primary_values[domain] = tail_out[:, self._seq_primary_slot[domain], :].copy()
                 seq_tail_all_values[domain] = tail_out.copy()
 
-            target_out: Optional["npt.NDArray[np.int64]"] = None
-            target_window_starts = np.zeros(B, dtype=np.int64)
-            target_window_lens = np.zeros(B, dtype=np.int64)
-            if self.include_target_view:
-                target_out = np.zeros_like(out)
-                primary_slot = self._seq_primary_slot[domain]
-                primary_offs, primary_vals, _, _ = col_data[primary_slot]
-                target_vals = item_int[:, 0] if item_int.shape[1] > 0 else np.zeros(B, dtype=np.int64)
-                for i in range(B):
-                    s = int(primary_offs[i])
-                    e = int(primary_offs[i + 1])
-                    rl = e - s
-                    if rl <= 0:
-                        continue
-                    ul = min(rl, max_len)
-                    if rl <= max_len:
-                        src_start = s
-                    else:
-                        target = int(target_vals[i])
-                        local_primary = primary_vals[s:e]
-                        hit_positions = (
-                            np.where(local_primary == target)[0]
-                            if target > 0 else np.array([], dtype=np.int64)
-                        )
-                        if len(hit_positions) > 0:
-                            hit_pos = int(hit_positions[-1])
-                            desired = hit_pos - int(max_len * 0.70)
-                            src_start = s + min(max(desired, 0), rl - max_len)
-                        else:
-                            src_start = e - ul
-                    target_window_starts[i] = src_start
-                    target_window_lens[i] = ul
-
-                for c, (offs, vals, vs, ci) in enumerate(col_data):
-                    for i in range(B):
-                        ul = int(target_window_lens[i])
-                        if ul <= 0:
-                            continue
-                        src_start = int(target_window_starts[i])
-                        target_out[i, c, :ul] = vals[src_start:src_start + ul]
-                target_out[target_out <= 0] = 0
-                for c, (_, _, vs, ci) in enumerate(col_data):
-                    slice_c = target_out[:, c, :]
-                    if vs > 0:
-                        self._record_oob(f'seq_{domain}_target', ci, slice_c, vs)
-                    else:
-                        slice_c[:] = 0
-                result[f'{domain}_target'] = torch.from_numpy(target_out.copy())
-                seq_target_primary_values[domain] = target_out[:, self._seq_primary_slot[domain], :].copy()
-                seq_target_all_values[domain] = target_out.copy()
-
             # Time bucketing.
             time_bucket = self._buf_seq_tb[domain][:B]
             time_bucket[:] = 0
@@ -825,10 +769,6 @@ class PCVRParquetDataset(IterableDataset):
             tail_inter_time_bucket: Optional["npt.NDArray[np.int64]"] = None
             tail_time_delta: Optional["npt.NDArray[np.float32]"] = None
             tail_inter_time_delta: Optional["npt.NDArray[np.float32]"] = None
-            target_time_bucket: Optional["npt.NDArray[np.int64]"] = None
-            target_inter_time_bucket: Optional["npt.NDArray[np.int64]"] = None
-            target_time_delta: Optional["npt.NDArray[np.float32]"] = None
-            target_inter_time_delta: Optional["npt.NDArray[np.float32]"] = None
             if ts_ci is not None:
                 ts_col = batch.column(ts_ci)
                 ts_offs = ts_col.offsets.to_numpy()
@@ -901,37 +841,6 @@ class PCVRParquetDataset(IterableDataset):
                     tail_inter_time_bucket = tail_inter_buckets
                     tail_inter_time_delta = tail_inter_diff.astype(np.float32)
 
-                if self.include_target_view:
-                    target_ts_padded = np.zeros((B, max_len), dtype=np.int64)
-                    for i in range(B):
-                        ul = int(target_window_lens[i])
-                        if ul <= 0:
-                            continue
-                        src_start = int(target_window_starts[i])
-                        target_ts_padded[i, :ul] = ts_vals[src_start:src_start + ul]
-
-                    target_time_diff = np.maximum(ts_expanded - target_ts_padded, 0)
-                    target_buckets = self._bucketize_time_diff(target_time_diff)
-                    target_buckets[target_ts_padded == 0] = 0
-                    target_time_bucket = target_buckets
-                    target_time_delta = target_time_diff.astype(np.float32)
-                    target_time_delta[target_ts_padded == 0] = 0
-
-                    target_inter_diff = np.zeros((B, max_len), dtype=np.int64)
-                    target_valid_ts = target_ts_padded > 0
-                    if max_len > 1:
-                        target_inter_diff[:, 1:] = np.abs(
-                            target_ts_padded[:, :-1] - target_ts_padded[:, 1:])
-                        target_inter_diff[:, 1:] = np.where(
-                            target_valid_ts[:, :-1] & target_valid_ts[:, 1:],
-                            target_inter_diff[:, 1:],
-                            0,
-                        )
-                    target_inter_buckets = self._bucketize_time_diff(target_inter_diff)
-                    target_inter_buckets[target_inter_diff == 0] = 0
-                    target_inter_time_bucket = target_inter_buckets
-                    target_inter_time_delta = target_inter_diff.astype(np.float32)
-
             result[f'{domain}_time_bucket'] = torch.from_numpy(time_bucket.copy())
             if self.use_inter_time_buckets:
                 result[f'{domain}_inter_time_bucket'] = torch.from_numpy(inter_time_bucket.copy())
@@ -955,24 +864,6 @@ class PCVRParquetDataset(IterableDataset):
                     result[f'{domain}_tail_time_delta'] = torch.from_numpy(tail_time_delta.copy())
                     result[f'{domain}_tail_inter_time_delta'] = torch.from_numpy(
                         tail_inter_time_delta.copy())
-            if self.include_target_view:
-                if target_time_bucket is None:
-                    target_time_bucket = np.zeros((B, max_len), dtype=np.int64)
-                result[f'{domain}_target_time_bucket'] = torch.from_numpy(target_time_bucket.copy())
-                if self.use_inter_time_buckets:
-                    if target_inter_time_bucket is None:
-                        target_inter_time_bucket = np.zeros((B, max_len), dtype=np.int64)
-                    result[f'{domain}_target_inter_time_bucket'] = torch.from_numpy(
-                        target_inter_time_bucket.copy())
-                if self.use_continuous_time:
-                    if target_time_delta is None:
-                        target_time_delta = np.zeros((B, max_len), dtype=np.float32)
-                    if target_inter_time_delta is None:
-                        target_inter_time_delta = np.zeros((B, max_len), dtype=np.float32)
-                    result[f'{domain}_target_time_delta'] = torch.from_numpy(
-                        target_time_delta.copy())
-                    result[f'{domain}_target_inter_time_delta'] = torch.from_numpy(
-                        target_inter_time_delta.copy())
 
         if self.use_xdomain_features:
             xdomain = self._build_xdomain_features(
@@ -982,10 +873,6 @@ class PCVRParquetDataset(IterableDataset):
                 tail_xdomain = self._build_xdomain_features(
                     B, item_int, seq_tail_primary_values, seq_tail_all_values)
                 result['xdomain_dense_feats_tail'] = torch.from_numpy(tail_xdomain.copy())
-            if self.include_target_view:
-                target_xdomain = self._build_xdomain_features(
-                    B, item_int, seq_target_primary_values, seq_target_all_values)
-                result['xdomain_dense_feats_target'] = torch.from_numpy(target_xdomain.copy())
 
         return result
 

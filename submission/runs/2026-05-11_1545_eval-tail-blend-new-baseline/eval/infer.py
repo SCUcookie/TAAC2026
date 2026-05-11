@@ -90,7 +90,6 @@ _FALLBACK_SEQ_MAX_LENS = 'seq_a:256,seq_b:256,seq_c:512,seq_d:512'
 _FALLBACK_BATCH_SIZE = 256
 _FALLBACK_NUM_WORKERS = 16
 _FALLBACK_TAIL_BLEND_WEIGHT = 0.15
-_FALLBACK_TARGET_BLEND_WEIGHT = 0.10
 
 
 # Hyperparameter keys used to build the model. Everything else in
@@ -140,40 +139,35 @@ def _parse_primary_seq_fids(s: str) -> Dict[str, int]:
     return out
 
 
-def _view_batch_from_prefix_batch(batch: Dict[str, Any], view: str) -> Dict[str, Any]:
-    view_batch: Dict[str, Any] = {}
+def _tail_batch_from_prefix_batch(batch: Dict[str, Any]) -> Dict[str, Any]:
+    tail_batch: Dict[str, Any] = {}
     seq_domains = batch.get('_seq_domains', [])
     domain_set = set(seq_domains)
     for key, value in batch.items():
         if isinstance(value, torch.Tensor):
-            view_batch[key] = value
+            tail_batch[key] = value
         else:
-            view_batch[key] = value
+            tail_batch[key] = value
 
     for domain in seq_domains:
-        view_key = f'{domain}_{view}'
-        if view_key in batch:
-            view_batch[domain] = batch[view_key]
+        tail_key = f'{domain}_tail'
+        if tail_key in batch:
+            tail_batch[domain] = batch[tail_key]
         for suffix in ('time_bucket', 'inter_time_bucket', 'time_delta', 'inter_time_delta'):
-            src = f'{domain}_{view}_{suffix}'
+            src = f'{domain}_tail_{suffix}'
             dst = f'{domain}_{suffix}'
             if src in batch:
-                view_batch[dst] = batch[src]
-    view_xdomain_key = f'xdomain_dense_feats_{view}'
-    if view_xdomain_key in batch:
-        view_batch['xdomain_dense_feats'] = batch[view_xdomain_key]
+                tail_batch[dst] = batch[src]
+    if 'xdomain_dense_feats_tail' in batch:
+        tail_batch['xdomain_dense_feats'] = batch['xdomain_dense_feats_tail']
 
-    for key in list(view_batch.keys()):
+    for key in list(tail_batch.keys()):
         if (
-            key.startswith('xdomain_dense_feats_')
-            or any(
-                key == f'{domain}_{view_name}' or key.startswith(f'{domain}_{view_name}_')
-                for domain in domain_set
-                for view_name in ('tail', 'target')
-            )
+            key == 'xdomain_dense_feats_tail'
+            or any(key == f'{domain}_tail' or key.startswith(f'{domain}_tail_') for domain in domain_set)
         ):
-            del view_batch[key]
-    return view_batch
+            del tail_batch[key]
+    return tail_batch
 
 
 def _prefix_batch_without_tail(batch: Dict[str, Any]) -> Dict[str, Any]:
@@ -183,11 +177,10 @@ def _prefix_batch_without_tail(batch: Dict[str, Any]) -> Dict[str, Any]:
         key: value
         for key, value in batch.items()
         if (
-            not key.startswith('xdomain_dense_feats_')
+            key != 'xdomain_dense_feats_tail'
             and not any(
-                key == f'{domain}_{view_name}' or key.startswith(f'{domain}_{view_name}_')
+                key == f'{domain}_tail' or key.startswith(f'{domain}_tail_')
                 for domain in domain_set
-                for view_name in ('tail', 'target')
             )
         )
     }
@@ -449,26 +442,10 @@ def main() -> None:
     ))
     tail_blend_weight = min(max(tail_blend_weight, 0.0), 1.0)
     tail_blend_enabled = tail_blend_enabled and tail_blend_weight > 0.0
-    target_blend_enabled = _env_bool('EVAL_TARGET_BLEND', True)
-    target_blend_weight = float(os.environ.get(
-        'EVAL_TARGET_BLEND_WEIGHT',
-        str(_FALLBACK_TARGET_BLEND_WEIGHT),
-    ))
-    target_blend_weight = min(max(target_blend_weight, 0.0), 1.0)
-    target_blend_enabled = target_blend_enabled and target_blend_weight > 0.0
-    total_extra_weight = tail_blend_weight + target_blend_weight
-    if total_extra_weight > 0.60:
-        scale = 0.60 / total_extra_weight
-        tail_blend_weight *= scale
-        target_blend_weight *= scale
     logging.info(
-        "Eval multiview blend: tail_enabled=%s, tail_weight=%.4f, "
-        "target_enabled=%s, target_weight=%.4f, prefix_weight=%.4f",
+        "Eval tail blend: enabled=%s, weight=%.4f",
         tail_blend_enabled,
         tail_blend_weight,
-        target_blend_enabled,
-        target_blend_weight,
-        1.0 - tail_blend_weight - target_blend_weight,
     )
 
     test_dataset = PCVRParquetDataset(
@@ -484,7 +461,6 @@ def main() -> None:
         use_inter_time_buckets=bool(train_config.get('use_inter_time_buckets', False)),
         use_continuous_time=bool(train_config.get('use_continuous_time', False)),
         include_tail_view=tail_blend_enabled,
-        include_target_view=target_blend_enabled,
     )
     total_test_samples = test_dataset.num_rows
     logging.info(f"Total test samples: {total_test_samples}")
@@ -544,20 +520,13 @@ def main() -> None:
             user_ids = batch.get('user_id', [])
 
             logits, _ = model.predict(model_input)
-            base_logits = logits
-            prefix_weight = 1.0 - tail_blend_weight - target_blend_weight
-            blended_logits = prefix_weight * base_logits
             if tail_blend_enabled:
-                tail_input = _batch_to_model_input(
-                    _view_batch_from_prefix_batch(batch, 'tail'), device)
+                tail_input = _batch_to_model_input(_tail_batch_from_prefix_batch(batch), device)
                 tail_logits, _ = model.predict(tail_input)
-                blended_logits = blended_logits + tail_blend_weight * tail_logits
-            if target_blend_enabled:
-                target_input = _batch_to_model_input(
-                    _view_batch_from_prefix_batch(batch, 'target'), device)
-                target_logits, _ = model.predict(target_input)
-                blended_logits = blended_logits + target_blend_weight * target_logits
-            logits = blended_logits
+                logits = (
+                    (1.0 - tail_blend_weight) * logits
+                    + tail_blend_weight * tail_logits
+                )
             logits = logits.squeeze(-1)
             probs = torch.sigmoid(logits).cpu().numpy()
             all_probs.extend(probs.tolist())
