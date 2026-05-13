@@ -2,46 +2,90 @@
 
 Read `prompt/codex_workflow.md`, then `prompt/plan.md`, then the latest records under `feedbacks/records/`.
 
-Work in `New_baseline/` unless the user redirects. Preserve the baseline checkpoint and model weights. Only modify evaluation-side code.
+## Current Best
 
-Current state:
+- Best AUC: `0.819544`.
+- Inference time: `481.66s`.
+- Best evaluator: `submission/platform_uploads/2026-05-12_eval_seed20260511_archive-fast-cpuload.zip`.
+- Best checkpoint: `global_step18120.layer=2.head=4.hidden=64.best_model`.
+- Best local validation: epoch 5 AUC `0.8658379184807092`, logloss `0.2212848663330078`.
+- Direct CUDA checkpoint load failed with OOM; CPU-staged checkpoint load succeeded and should be reused.
 
-- Best result remains the original baseline checkpoint with AUC `0.813094` and inference time `1480.38s`.
-- Best known config is `seq_max_lens=seq_a:256,seq_b:256,seq_c:512,seq_d:448`, `EVAL_TTA_MODE=recent_blend`, `EVAL_TTA_WEIGHT=0.12`, `EVAL_TTA_REPEAT=14`, and `EVAL_TTA_CROP_LENS=seq_a:128,seq_b:128,seq_c:256,seq_d:256`.
-- A newly trained model scored only AUC `0.80424` with inference time `907.78s` under the same best known evaluator, so it should not replace the original baseline checkpoint.
-- The user may retrain that model with 2 GPUs because the one-GPU attempt hit OOM. If redirected to training, treat it as a separate experiment and still compare against the original baseline checkpoint.
+## Today's Unfinished Work
 
-First inspect current `New_baseline/infer.py` and `New_baseline/dataset.py`.
+There are still 2 evaluation tasks and 1 training task planned.
 
-Implement true tail-window inference as a controlled evaluation variant:
+### Evaluation 2
 
-- Current dataset prefix truncation uses `values[start:start + use_len]`.
-- Add an eval-only way to read suffix/tail windows using `values[end - use_len:end]`.
-- Keep prefix/full-window behavior available.
-- Blend logits from full/prefix and true-tail views.
+Completed:
 
-Initial candidate:
+- package `submission/platform_uploads/2026-05-12_eval_tailblend-w010-cpuload.zip`
+- AUC `0.819304`
+- inference time `641.82s`
+- result was worse than current best `0.819544`
 
-- Full-window logit weight `0.85`
-- Tail-window logit weight `0.15`
-- Keep BF16 AMP unless logs show non-finite scores.
-- Target runtime can approach the limit if AUC improves.
+Do not promote tail blend weight `0.10`.
 
-Do not repeat identical TTA passes for AUC. Repeating deterministic logits does not change rank order meaningfully.
+### Evaluation 3
 
-Useful variants to test, in order:
+Completed with diagnostic confirmation package:
 
-1. Full-window + true-tail blend, weight `0.15`
-2. Weight sweep: `0.08`, `0.12`, `0.20`
-3. Multi-window blend: prefix + middle + tail, only if tail blend helps
-4. FP32/no-AMP comparison only if there is enough evaluation budget
+`submission/platform_uploads/2026-05-12_eval_best-cpuload-diagnostics.zip`
 
-Before platform submission:
+Result:
 
-1. Run syntax check on changed Python files.
-2. Confirm inference config logs include the active window mode and blend weights.
-3. Confirm output has exactly `310000` predictions and `310000` unique user IDs.
-4. Confirm scores are finite and non-negative.
-5. Confirm platform log reaches `PLATFORM_INFER_SUMMARY`.
+- AUC `0.819544`
+- predictions `310000`
+- unique users `310000`
+- internal diagnostic elapsed time `434.885s`
+- infer-stage wall time about `469.77s`
 
-Record every submitted result in `feedbacks/records/`.
+It keeps the current-best scoring path and adds bounded diagnostic logs. Use it as the preferred observable evaluator unless a later platform run beats `0.819544`.
+
+### Training
+
+Submit:
+
+`submission/platform_uploads/2026-05-12_training_2gpu-seed20260512/`
+
+Purpose:
+
+- controlled seed-variance run
+- seed `20260512`
+- same proven 2-GPU archived recipe
+- concise logs with `--log_every_n_steps 200`
+
+When it finishes, evaluate its best checkpoint first with the CPU-load archived evaluator.
+
+## Final Ten-Day Direction
+
+The competition plan is now leaderboard-first:
+
+- AUC is the primary objective.
+- Latency is a hard validity constraint.
+- Keep one promoted best checkpoint/evaluator pair.
+- Use platform eval slots only for high-confidence comparisons.
+- Maintain complete run records for every train/eval attempt.
+
+Priority ideas:
+
+1. seed variance and checkpoint selection
+2. conservative ranking-changing evaluator variants
+3. timestamp and sequence-interaction features
+4. partial-data fast validation before full training
+5. larger architecture changes only after a quick signal
+
+Carry forward from `temp.md`:
+
+- explicit sequence-feature interaction rules may help
+- timestamp-aware train/eval alignment is worth testing
+- partial continuous-time data can validate ideas faster
+- industrial-track ideas can guide design when rules and latency allow
+- do not maximize every suggestion blindly
+
+## Guardrails
+
+- Do not use direct CUDA checkpoint load for this checkpoint family.
+- Do not spend slots on deterministic repeated inference.
+- Do not use the old multiview target-tail evaluator as the default path.
+- Do not overwrite the `0.819544` best pair unless a platform result beats it.
