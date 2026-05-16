@@ -49,3 +49,9 @@ Tail-view blending already regressed. A recent-history crop TTA targets a differ
 ## Decision Rule
 
 Promote only if platform AUC exceeds current best `0.820747`.
+
+## Result
+
+- AUC: `0.820742`
+- inference time: `430s`
+- outcome: did not beat the current best single-pass CPU-load evaluator

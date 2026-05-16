@@ -31,7 +31,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 
-from dataset import FeatureSchema, PCVRParquetDataset, NUM_TIME_BUCKETS
+from dataset import FeatureSchema, PCVRParquetDataset, NUM_TIME_BUCKETS, TIME_CONTEXT_DIM
 from model import PCVRHyFormer, ModelInput
 
 
@@ -184,6 +184,20 @@ def resolve_model_cfg(train_config: Dict[str, Any]) -> Dict[str, Any]:
                 logging.warning(
                     f"train_config missing both 'num_time_buckets' and 'use_time_buckets', "
                     f"using fallback = {cfg[key]}")
+            continue
+        if key == 'time_context_dense_dim':
+            if 'time_context_dense_dim' in train_config:
+                cfg[key] = train_config['time_context_dense_dim']
+            elif train_config.get('use_absolute_time_context', False):
+                cfg[key] = TIME_CONTEXT_DIM
+                logging.warning(
+                    "train_config missing 'time_context_dense_dim' while "
+                    "'use_absolute_time_context' is enabled; deriving "
+                    f"time_context_dense_dim={cfg[key]} from dataset.TIME_CONTEXT_DIM")
+            else:
+                cfg[key] = _FALLBACK_MODEL_CFG[key]
+                logging.warning(
+                    f"train_config missing '{key}', using fallback = {cfg[key]}")
             continue
 
         if key in train_config:

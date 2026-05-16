@@ -421,6 +421,13 @@ def main() -> None:
         "hidden": args.d_model,
     }
 
+    train_config = dict(vars(args))
+    train_config.update({
+        "num_time_buckets": model_args["num_time_buckets"],
+        "xdomain_dense_dim": model_args["xdomain_dense_dim"],
+        "time_context_dense_dim": model_args["time_context_dense_dim"],
+    })
+
     trainer = PCVRHyFormerRankingTrainer(
         model=model,
         train_loader=train_loader,
@@ -444,7 +451,7 @@ def main() -> None:
         schema_path=schema_path,
         ns_groups_path=args.ns_groups_json if args.ns_groups_json and os.path.exists(args.ns_groups_json) else None,
         eval_every_n_steps=args.eval_every_n_steps,
-        train_config=vars(args),
+        train_config=train_config,
         use_ema=args.use_ema,
         ema_decay=args.ema_decay,
         warmup_steps=args.warmup_steps,

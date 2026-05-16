@@ -29,4 +29,9 @@ Preserve the strong current model while giving the unified block direct access t
 
 ## Next Action
 
-Do not spend another successful evaluation on pre-training inference variants. Keep `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip` as the locked baseline, submit the training directory, then evaluate only the best resulting checkpoint against current best AUC `0.820747`.
+Pre-training evaluation is now closed for 2026-05-13:
+
+- locked best remains `AUC 0.820747`, `412s`
+- recent-crop TTA finished at `0.820742`, `430s`
+
+Submit the training directory, wait for completion, then evaluate only the best resulting checkpoint against current best AUC `0.820747`.

@@ -1,91 +1,75 @@
 # Tomorrow Startup Prompt
 
-Read `prompt/codex_workflow.md`, then `prompt/plan.md`, then the latest records under `feedbacks/records/`.
+Read these first, in order:
+
+1. `prompt/codex_workflow.md`
+2. `prompt/plan.md`
+3. latest `temp.md`
+4. latest files under `feedbacks/records/` and `feedbacks/platform_runs/`
+5. `docs/2026-05-14_training_recent_crop_regularization.md`
 
 ## Current Best
 
-- Best AUC: `0.819544`.
-- Inference time: `481.66s`.
-- Best evaluator: `submission/platform_uploads/2026-05-12_eval_seed20260511_archive-fast-cpuload.zip`.
-- Best checkpoint: `global_step18120.layer=2.head=4.hidden=64.best_model`.
-- Best local validation: epoch 5 AUC `0.8658379184807092`, logloss `0.2212848663330078`.
-- Direct CUDA checkpoint load failed with OOM; CPU-staged checkpoint load succeeded and should be reused.
+- Best AUC: `0.820747`
+- Best evaluator package: `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip`
+- Best evaluator snapshot: `submission/runs/2026-05-13_0001_eval-seed20260512-best-cpuload/eval/`
+- Best checkpoint: `global_step18120.layer=2.head=4.hidden=64.best_model`
+- CPU-staged checkpoint loading is required for this checkpoint family.
 
-## Today's Unfinished Work
+Inference time is not an academic-track scoring metric. Do not promote or choose submissions based on runtime unless AUC is tied and a process decision requires choosing a package.
 
-There are still 2 evaluation tasks and 1 training task planned.
+## 2026-05-14 Summary
 
-### Evaluation 2
+Two eval-only jobs on the old `20260512` checkpoint did not improve AUC:
 
-Completed:
+1. `2026-05-14_0007_eval-seed20260512-recent-crop-tta-w004-cpuload`
+   - package: `submission/platform_uploads/2026-05-14_eval_seed20260512_recent-crop-tta-w004-cpuload.zip`
+   - AUC: `0.820747`
+   - inference time: `295s`
+   - decision: exact AUC tie with current best; no academic-track improvement
 
-- package `submission/platform_uploads/2026-05-12_eval_tailblend-w010-cpuload.zip`
-- AUC `0.819304`
-- inference time `641.82s`
-- result was worse than current best `0.819544`
+2. `2026-05-14_0008_eval-seed20260512-recent-crop-tta-long256-w004-cpuload`
+   - package: `submission/platform_uploads/2026-05-14_eval_seed20260512_recent-crop-tta-long256-w004-cpuload.zip`
+   - AUC: `0.820742`
+   - inference time: `416s`
+   - decision: same AUC as yesterday's recent-crop TTA and below current best
 
-Do not promote tail blend weight `0.10`.
+Postmortem: these were too close to already-tested inference perturbations. Do not submit more eval-only variants on the old `20260512` checkpoint family.
 
-### Evaluation 3
+## 2026-05-15 Status
 
-Completed with diagnostic confirmation package:
+The recent-crop-regularized training finished and should not be evaluated:
 
-`submission/platform_uploads/2026-05-12_eval_best-cpuload-diagnostics.zip`
+- training package: `submission/platform_uploads/2026-05-14_training_recent-crop-regularized-seed20260514/`
+- log: `temp.md`
+- best epoch / step: epoch `6`, total step `21744`
+- best validation AUC: `0.866055225247`
+- best validation logloss: `0.220998421311`
+- later curve: decays to AUC `0.852247892833` by epoch `11`
+- decision: reject for platform eval because it is below the current best local signal `0.866320891869`
 
-Result:
+## Today Task
 
-- AUC `0.819544`
-- predictions `310000`
-- unique users `310000`
-- internal diagnostic elapsed time `434.885s`
-- infer-stage wall time about `469.77s`
+Run the three evaluation processes first. Do not submit the 2026-05-13 absolute-time-context training directory as the next action.
 
-It keeps the current-best scoring path and adds bounded diagnostic logs. Use it as the preferred observable evaluator unless a later platform run beats `0.819544`.
+Why not the 2026-05-13 training directory:
 
-### Training
+- It was only the remaining prepared unused training artifact.
+- It changes model shape by adding an absolute-time context token.
+- It has no positive platform signal yet.
+- It conflicts with the eval-first operating order for today.
 
-Submit:
+## Today's Evaluation Slot Policy
 
-`submission/platform_uploads/2026-05-12_training_2gpu-seed20260512/`
-
-Purpose:
-
-- controlled seed-variance run
-- seed `20260512`
-- same proven 2-GPU archived recipe
-- concise logs with `--log_every_n_steps 200`
-
-When it finishes, evaluate its best checkpoint first with the CPU-load archived evaluator.
-
-## Final Ten-Day Direction
-
-The competition plan is now leaderboard-first:
-
-- AUC is the primary objective.
-- Latency is a hard validity constraint.
-- Keep one promoted best checkpoint/evaluator pair.
-- Use platform eval slots only for high-confidence comparisons.
-- Maintain complete run records for every train/eval attempt.
-
-Priority ideas:
-
-1. seed variance and checkpoint selection
-2. conservative ranking-changing evaluator variants
-3. timestamp and sequence-interaction features
-4. partial-data fast validation before full training
-5. larger architecture changes only after a quick signal
-
-Carry forward from `temp.md`:
-
-- explicit sequence-feature interaction rules may help
-- timestamp-aware train/eval alignment is worth testing
-- partial continuous-time data can validate ideas faster
-- industrial-track ideas can guide design when rules and latency allow
-- do not maximize every suggestion blindly
+- Eval 1: submit a current-best anchor. Prefer `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip`; use `submission/platform_uploads/2026-05-14_eval_seed20260512_recent-crop-tta-w004-cpuload.zip` only if faster turnaround is operationally more useful.
+- Eval 2: evaluate the 2026-05-14 recent-crop-regularized best checkpoint only if direct platform feedback on this training branch is worth one slot despite local AUC `0.866055225247` being below the current best local signal `0.866320891869`.
+- Eval 3: decide after Eval 1 and Eval 2. If Eval 2 beats or ties `0.820747`, use Eval 3 for confirmation or a conservative same-branch evaluator. If Eval 2 is below `0.820747`, do not spend Eval 3 on that branch.
+- Training job: submit only after the three eval results clarify the next direction; do not default to the old 2026-05-13 absolute-time package.
 
 ## Guardrails
 
-- Do not use direct CUDA checkpoint load for this checkpoint family.
-- Do not spend slots on deterministic repeated inference.
-- Do not use the old multiview target-tail evaluator as the default path.
-- Do not overwrite the `0.819544` best pair unless a platform result beats it.
+- No more eval-only variants on the old `20260512` checkpoint.
+- Do not evaluate weak local checkpoints just to use slots.
+- Do not use direct CUDA checkpoint loading.
+- Keep records updated immediately after each platform training/evaluation result.
+- Every meaningful run should link `submission/runs/`, `submission/platform_uploads/`, `feedbacks/records/`, and `feedbacks/platform_runs/` when applicable.

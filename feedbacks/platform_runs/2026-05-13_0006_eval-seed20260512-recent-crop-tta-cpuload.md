@@ -42,4 +42,6 @@ User requires a useful last evaluation rather than a duplicate submission. This 
 
 ## Platform Result
 
-Pending.
+- AUC: `0.820742`
+- inference time: `430s`
+- outcome: essentially tied but still below current best `0.820747`, do not promote
