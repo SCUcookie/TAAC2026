@@ -84,6 +84,17 @@ Use this order for training work:
 
 ## 6. Evaluation Flow
 
+Every competition day, the first job is to define and execute the three available evaluation tasks. Do this before training submissions, architecture implementation, or longer research work.
+
+Daily evaluation discipline:
+
+1. Read `prompt/plan.md` and identify the three evaluation packages/tasks for the day.
+2. Submit evaluation task 1.
+3. Record AUC, inference time, package path, logs, and promotion decision.
+4. Update `prompt/plan.md` immediately.
+5. Choose task 2 based on the updated result.
+6. Repeat until all three daily evaluation slots are used or explicitly deferred by the user.
+
 Before any platform submission:
 
 1. Run local inference.

@@ -2,197 +2,161 @@
 
 ## Current Best
 
-- Best AUC: `0.820747`
-- Best inference time: `412s`
-- Best evaluator package: `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip`
-- Best evaluator snapshot: `submission/runs/2026-05-13_0001_eval-seed20260512-best-cpuload/eval/`
+- Best platform AUC: `0.820776`
+- Best evaluator package: `submission/platform_uploads/2026-05-16_eval_oldbest-domain-ablation-seqc-w006-bs128.zip`
 - Best checkpoint: `global_step18120.layer=2.head=4.hidden=64.best_model`
-- Checkpoint family rule: direct CUDA checkpoint load is not stable here; CPU-staged checkpoint loading is the default safe path
+- Checkpoint family: stable `20260512` training family
+- Safe inference rule: use CPU-staged checkpoint loading; do not use older direct-CUDA-load evaluators.
+- Academic-track note: inference time is not the score, but keep variants under the platform time limit.
 
-## 2026-05-13 Summary
+## Daily First Job: Three Evaluation Tasks
 
-Three evaluation attempts were completed around the same `20260512` seed checkpoint family.
+Every competition day starts by defining and executing the three available evaluation tasks before training or architecture work.
 
-### Evaluation 1: Stable Single-Pass CPU-Load
+Rules:
 
-Completed and promoted:
+- Always reserve the first work block for the day's three evaluation submissions.
+- After each platform result, immediately update this plan with AUC, inference time, package path, and promotion decision.
+- If an evaluation beats current best, use the remaining slots to bracket/refine around that new best.
+- If none beats current best, keep `w0.06` and move to the prepared training/architecture job after all three eval slots are used or explicitly deferred.
 
-- package: `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip`
-- result: `AUC 0.820747`
-- inference time: `412s`
+Today's evaluation queue:
 
-This is the current promoted best pair.
+1. `submission/platform_uploads/2026-05-17_eval_oldbest-domain-ablation-seqc-w0055-bs128.zip`
+   - refines the left side of the saturated optimum between `w0.05` and `w0.06`
+   - result: AUC `0.820775`, inference time `1000s`
+   - decision: do not promote; it ties `w0.05` and remains below `w0.06`
 
-### Evaluation 2: Tail Blend Retry
+2. `submission/platform_uploads/2026-05-17_eval_oldbest-domain-ablation-seqc-w00625-bs128.zip`
+   - checks whether the best point is slightly above `w0.06`
+   - result: AUC `0.820776`, inference time `850s`
+   - decision: AUC tie with current best; keep `w0.06` as official promoted best, but `w0.0625` is an operationally acceptable tied evaluator
 
-The first tail-blend attempt failed and does not count as a successful daily submission.
+3. `submission/platform_uploads/2026-05-17_eval_oldbest-domain-ablation-seqc-w0065-bs128.zip`
+   - right-side guardrail below the already-regressed `w0.07`
+   - optional final bracket check; promote only if AUC > `0.820776`
 
-The repaired retry finished but regressed:
+## 2026-05-16 Summary
 
-- package: `submission/platform_uploads/2026-05-13_eval_seed20260512_tailblend-w005-bs128-cpuload.zip`
-- result: `AUC 0.820481`
-- inference time: `882s`
+Today used all evaluation slots on the only confirmed platform-positive direction: old best checkpoint plus `seq_c` domain-ablation logit blend.
 
-Decision: do not promote. Tail-view blend hurt both AUC and latency for this checkpoint.
+### Evaluation Bracket
 
-### Evaluation 3: Recent-Crop TTA
+Baseline before today:
 
-The last useful evaluation slot was used on a new recent-history crop TTA variant:
+- `w0.03`: AUC `0.820768`
 
-- package: `submission/platform_uploads/2026-05-13_eval_seed20260512_recent-crop-tta-cpuload.zip`
-- result: `AUC 0.820742`
-- inference time: `430s`
+Today:
 
-Decision: very close, but still below the current best `0.820747`. Do not promote.
+- `w0.05` BS128: AUC `0.820775`, inference time about `800s`
+- `w0.06` BS128: AUC `0.820776`, inference time about `960s`
+- `w0.07` BS128: AUC `0.820775`, inference time about `750s`
 
-### Previous Training Package Prepared
+Decision:
 
-- training package: `submission/platform_uploads/2026-05-13_training_abs-time-context-seed20260513/`
-- run snapshot: `submission/runs/2026-05-13_0004_training-abs-time-context-seed20260513/train/`
-- matching future eval snapshot: `submission/runs/2026-05-13_0004_training-abs-time-context-seed20260513/eval/`
+- Promote `w0.06`.
+- `w0.07` regressed, so the inference-only optimum is shallow and saturated around `0.06`.
+- Keep `w0.06` unless a future platform result beats `0.820776`.
 
-Controlled change versus the proven `20260512` recipe:
+### Main Training Job Prepared
 
-- seed `20260512 -> 20260513`
-- add bounded absolute timestamp context from row `timestamp`
-- derive compact UTC+8 hour/weekday features
-- inject them as one extra model token
+Final training package:
 
-Implementation status:
+`submission/platform_uploads/2026-05-16_training_stable-bce-bpr-seqc-drop-seed20260516.zip`
 
-- dataset / model / trainer / train wiring completed
-- eval compatibility for the future checkpoint completed
-- syntax and import checks passed locally
-- 2026-05-14 decision: deprioritize this package for now. It changes model shape and has no positive platform signal.
+Base:
 
-## Current Next Task
+- stable `2026-05-12_training_2gpu-seed20260512` architecture and data path
+- `d_model=64`, `2` HyFormer blocks, `4` heads
+- long sequence defaults: `seq_a:256,seq_b:256,seq_c:512,seq_d:512`
+- target-aware attention, cross-domain attention, xdomain dense features, inter-time buckets, continuous time deltas, wide dense tokens, SwiGLU, RMSNorm, EMA
 
-The 2026-05-14 recent-crop-regularized training completed successfully, but it should not be evaluated.
+Controlled changes:
 
-Best local point from `temp.md`:
+- seed `20260516`
+- `--loss_type bce`
+- `--pairwise_bpr_weight 0.04`
+- `--domain_dropout_probs seq_c:0.06`
+- architecture unchanged
 
-- epoch: `6`
-- total step: `21744`
-- validation AUC: `0.866055225247`
-- validation logloss: `0.220998421311`
-- final state: early stopping at epoch `11`, training exit code `0`
+Rationale:
 
-Decision: reject for platform evaluation. The best local AUC is below the current winning `20260512` checkpoint family local signal `0.866320891869`, and the curve decays sharply after epoch 7. Do not spend a scarce evaluation chance on this checkpoint.
+- Research notes prioritize AUC-oriented ranking objectives, target-aware interest extraction, and time-aware sequence modeling.
+- The stable family already contains the target/time/cross-domain parts.
+- Today's platform feedback shows mild `seq_c` removal improves ranking, with optimum around `0.06`.
+- Training should therefore regularize `seq_c` reliance and optimize ranking, rather than jump to a larger architecture today.
 
-Today's next action is eval-first, not training-first. Do not submit the prepared 2026-05-13 absolute-time-context training package as the next task.
+Verification:
 
-Reason: that package was only the remaining prepared unused training-side artifact, but it changes model shape and has no platform signal. If today's priority is three evaluation processes, the 2026-05-13 training directory is not the correct next action.
+- AST parse passed for modified `train.py` and `trainer.py`.
+- Training zip contains exactly `dataset.py`, `model.py`, `ns_groups.json`, `run.sh`, `train.py`, `trainer.py`, `utils.py`.
 
-Use the three evaluation opportunities as a result-dependent sequence. The recent-crop-regularized checkpoint is a low-confidence candidate because its best local AUC is below the current best local signal; evaluate it only if the goal is to get direct platform feedback on the new training branch despite the local reject signal.
+## Next Immediate Actions
 
-## Important Guardrails
+1. Submit the three daily evaluation tasks listed above, updating this file after each result.
 
-- Do not submit more evaluation variants on the old `20260512` checkpoint family.
-- Do not use older direct-CUDA-load evaluators for this checkpoint family.
-- Do not evaluate weak local checkpoints just to use slots.
-- Keep the current promoted best unchanged unless a future platform result exceeds `0.820747`.
-- The competition end date is `2026-05-23`, so remaining work should stay narrow and leaderboard-driven.
+2. Then submit the prepared absolute-time plus target-domain-summary training package:
 
-## 2026-05-14 Update
+   `submission/platform_uploads/2026-05-17_training_abs-time-target-summary-seed20260517.zip`
 
-### Evaluation Results
+3. The 2026-05-16 training checkpoint diagnostic eval was reviewed:
 
-Evaluation `2026-05-14_0007_eval-seed20260512-recent-crop-tta-w004-cpuload` completed:
+   - best local validation AUC from `temp.md`: `0.866052` at epoch 6
+   - gate remains `0.86632`
+   - platform diagnostic AUC: about `0.816`
+   - decision: reject this trained branch; do not spend more evaluation slots on it
 
-- package: `submission/platform_uploads/2026-05-14_eval_seed20260512_recent-crop-tta-w004-cpuload.zip`
-- result: `AUC 0.820747`
-- platform inference time: `295s`
-- predictions: `310000`
-- decision: exact AUC tie with current best. It is faster, but academic track does not score inference time, so keep the promoted best unchanged under the strict AUC-improvement rule.
+4. Historical package already submitted/finished:
 
-Evaluation `2026-05-14_0008_eval-seed20260512-recent-crop-tta-long256-w004-cpuload` completed:
+   `submission/platform_uploads/2026-05-16_training_stable-bce-bpr-seqc-drop-seed20260516.zip`
 
-- package: `submission/platform_uploads/2026-05-14_eval_seed20260512_recent-crop-tta-long256-w004-cpuload.zip`
-- result: `AUC 0.820742`
-- platform inference time: `416s`
-- predictions: `310000`
-- decision: same AUC as yesterday's recent-crop TTA and below current best. Do not promote.
+5. When new training finishes, inspect local validation:
 
-Postmortem: the second 2026-05-14 eval was too weak a hypothesis for a scarce platform slot. `seq_a` and `seq_b` already cap at `256`, so `long256` only changed the long domains, and the `0.04` blend was unlikely to move rank enough after the `0.08` variant was already flat. Stop submitting eval-only variants on the old `20260512` checkpoint.
+   - promote for evaluation only if best validation AUC reaches at least `0.86632`, or clearly beats the focal clean retry and improves hist buckets 1 and 2.
+   - prefer epoch 4-6 checkpoints if the curve peaks early.
+   - reject if AUC improves only after logloss improves while ranking decays.
 
-### Training Work
+6. If locally competitive, prepare evaluator from the promoted `w0.06` inference path:
 
-Training package `2026-05-14_0009_training-recent-crop-regularized-seed20260514` prepared:
+   - same old-best evaluator logic
+   - `seq_c` domain-ablation weight `0.06`
+   - safe batch size `128`, workers `2`, prefetch `1`
 
-- package: `submission/platform_uploads/2026-05-14_training_recent-crop-regularized-seed20260514/`
-- snapshot: `submission/runs/2026-05-14_0009_training-recent-crop-regularized-seed20260514/train/`
-- explanation: `docs/2026-05-14_training_recent_crop_regularization.md`
-- change: training-only stochastic recent-history crop regularization
-- defaults: `train_recent_crop_prob=0.35`, `train_recent_crop_min_ratio=0.60`, seed `20260514`
-- evaluator compatibility: unchanged model architecture, so use stable CPU-staged single-pass evaluator for any strong checkpoint
+7. If not locally competitive, do not spend an evaluation slot. Move to the next architecture work item below.
 
-Validation and import checks passed locally before packaging:
+## Next Architecture Work
 
-- AST syntax check passed for `dataset.py`, `model.py`, `trainer.py`, `train.py`
-- import smoke check passed with `PYTHONDONTWRITEBYTECODE=1`
-- upload directory matches the run snapshot
-- `model.py` and `trainer.py` are hash-identical to the proven `20260512` base
+Priority order for the next implementation cycle:
 
-### End-of-Day Decision
+1. Target-aware domain summary tokens.
+   - Candidate item attends to each domain sequence.
+   - Add four target-interest tokens into the RankMixer/prediction path.
+   - Keep model size stable.
 
-The current best remains unchanged:
+2. Time-decay pooling and session-gap features.
+   - Reuse existing `time_delta`, `inter_time_delta`, and bucket inputs.
+   - Add domain-level decay summaries without changing inference input format.
 
-- AUC: `0.820747`
-- package: `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip`
-- checkpoint: `global_step18120.layer=2.head=4.hidden=64.best_model`
+3. Small late unified interaction block.
+   - Tokens: item target, NS tokens, final query tokens, domain summaries.
+   - Keep token count bounded; no full OneTrans rewrite yet.
 
-Tomorrow's action is conditional on the result of the recent-crop-regularized training. Do not evaluate it unless local validation is competitive; do not spend platform evaluation slots on weak checkpoints or old-checkpoint inference variants.
+4. Controlled ablations only.
+   - baseline stable package
+   - +BCE/BPR
+   - +BCE/BPR + `seq_c` dropout
+   - +target-aware summaries
+   - +time-decay summaries
 
-## 2026-05-15 Update
+## Guardrails
 
-### Recent-Crop-Regularized Training Result
+- Do not evaluate new training checkpoints below the local gate.
+- Do not submit more old-checkpoint inference-only `seq_c` weights unless there is a reason to refine around `0.055` or `0.065`; the gain is now tiny.
+- Do not evaluate yesterday's focal clean retry directly; its best local AUC was below the gate.
+- Do not make a large architecture jump in the same job as objective/data-robustness changes.
+- Keep every platform result linked in `feedbacks/records/` and `submission/platform_uploads/`.
 
-Training `2026-05-14_0009_training-recent-crop-regularized-seed20260514` finished:
+## Key Records
 
-- log: `temp.md`
-- best checkpoint step: `21744`
-- best epoch: `6`
-- best validation AUC: `0.866055225247`
-- best validation logloss: `0.220998421311`
-- epoch 7 AUC: `0.866049268051`
-- epoch 8 AUC: `0.864430103406`
-- epoch 11 AUC: `0.852247892833`
-- outcome: early stopped at epoch `11`, exit code `0`
-
-Decision: do not evaluate. This is weaker than the current best local signal from the `20260512` checkpoint family and shows overfitting/instability after the best point.
-
-### Today Submission Plan
-
-Run three evaluation processes before any new training job. Update the later eval choice after each platform result.
-
-1. Eval 1: submit the safest available current-best evaluation path as the control/anchor. Prefer the current promoted package `submission/platform_uploads/2026-05-13_eval_seed20260512_best-cpuload-diagnostics.zip`; if operational speed matters for turnaround, use the tied faster package `submission/platform_uploads/2026-05-14_eval_seed20260512_recent-crop-tta-w004-cpuload.zip`.
-2. Eval 2: submit the 2026-05-14 recent-crop-regularized best checkpoint only if you deliberately want direct platform feedback on this training branch. Treat it as exploratory because local AUC `0.866055225247` is below the current best local signal `0.866320891869`.
-3. Eval 3: choose after Eval 1 and Eval 2 return. If Eval 2 beats or ties `0.820747`, spend Eval 3 on the same branch's best conservative evaluator/confirmation. If Eval 2 is below `0.820747`, stop evaluating that branch and use Eval 3 only for a different prepared candidate with stronger local or platform evidence.
-
-Training job after evaluations:
-
-- Do not use `submission/platform_uploads/2026-05-13_training_abs-time-context-seed20260513/` as the default next action.
-- Submit a training job only after the three eval results indicate what is worth training next.
-- If no eval improves the leaderboard, the next training should be a new controlled variant based on the proven `20260512` architecture, not the older absolute-time package by default.
-
-Promotion rule remains strict: promote only if platform AUC exceeds `0.820747`.
-
-## Records To Maintain
-
-Every meaningful run should stay linked across:
-
-- `submission/runs/<run_id>/`
-- `submission/platform_uploads/`
-- `feedbacks/records/<run_id>.md`
-- `feedbacks/platform_runs/<run_id>.md`
-
-Record at minimum:
-
-- package path
-- checkpoint path
-- local validation AUC/logloss when available
-- platform AUC
-- inference time
-- prediction count
-- failure / OOM / import issues
-- promotion decision against the current best
+- Main day record: `feedbacks/records/2026-05-16_0001_eval-bracket-and-stable-bpr-training.md`
+- Final daily summary: `docs/2026-05-16_daily_summary.md`
